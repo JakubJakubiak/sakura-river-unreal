@@ -87,6 +87,7 @@ Tools/build_code.sh        # kompilacja C++
 Tools/build_content.sh     # materiały + import modeli + mapa (commandlet UE)
 Tools/run.sh -demo         # uruchomienie w oknie
 Tools/shots.sh "day@river,night@bridge"   # zrzuty testowe do Saved/SakuraShots + czasy klatek
+Tools/package_mac.sh       # paczka Shipping: Dist/Shipping/Mac/SakuraRiver-Mac-Shipping.app + Sakura.ini (CONFIG=Development — z logami)
 ```
 
 Struktura:
