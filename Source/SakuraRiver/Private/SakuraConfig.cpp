@@ -3,6 +3,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/Parse.h"
+#include "HAL/PlatformProcess.h"
 
 FString FSakuraConfig::LoadedFrom;
 
@@ -65,10 +66,18 @@ namespace
 FSakuraConfig FSakuraConfig::Load()
 {
 	FSakuraConfig C;
-	const FString Candidates[] = {
-		FPaths::Combine(FPaths::LaunchDir(), TEXT("Sakura.ini")),
-		FPaths::Combine(FPaths::ProjectDir(), TEXT("Sakura.ini")),
-	};
+	// gdzie szukać Sakura.ini: obok paczki .app (macOS, dwuklik ustawia katalog startowy na /), obok .exe i w katalogu startowym,
+	// na końcu domyślny plik w danych gry
+	TArray<FString> Candidates;
+	FString Exe = FPaths::ConvertRelativePathToFull(FPlatformProcess::ExecutablePath());
+	for (FString Dir = FPaths::GetPath(Exe); !Dir.IsEmpty() && Candidates.Num() < 8; Dir = FPaths::GetPath(Dir))
+	{
+		if (Dir.EndsWith(TEXT(".app"))) { Candidates.Insert(FPaths::Combine(FPaths::GetPath(Dir), TEXT("Sakura.ini")), 0); break; }
+		if (Candidates.Num() < 4) Candidates.Add(FPaths::Combine(Dir, TEXT("Sakura.ini")));
+		if (FPaths::IsSamePath(Dir, FPaths::GetPath(Dir)) || Dir == TEXT("/")) break;
+	}
+	Candidates.Add(FPaths::Combine(FPaths::LaunchDir(), TEXT("Sakura.ini")));
+	Candidates.Add(FPaths::Combine(FPaths::ProjectDir(), TEXT("Sakura.ini")));
 	for (const FString& Path : Candidates)
 	{
 		TArray<FString> Lines;
