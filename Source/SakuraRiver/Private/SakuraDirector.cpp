@@ -17,6 +17,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Fonts/FontMeasure.h"
 #include "GameFramework/GameUserSettings.h"
+#include "GenericPlatform/GenericApplication.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "Kismet/GameplayStatics.h"
@@ -157,6 +158,18 @@ void ASakuraDirector::BeginPlay()
 	{
 		if (!GetWorld()->IsPlayInEditor())
 		{
+			// okno nie może być większe od ekranu (MacBook 1470×956 pt): zmniejszamy z zachowaniem proporcji;
+			// na ekranie Retina obraz i tak ma 2× więcej pikseli, więc OBS dostaje pełne HD
+			FDisplayMetrics DM;
+			FDisplayMetrics::RebuildDisplayMetrics(DM);
+			const int32 AW = DM.PrimaryDisplayWorkAreaRect.Right - DM.PrimaryDisplayWorkAreaRect.Left;
+			const int32 AH = DM.PrimaryDisplayWorkAreaRect.Bottom - DM.PrimaryDisplayWorkAreaRect.Top - 40;
+			if (!Cfg.bFullscreen && AW > 0 && AH > 0 && (Cfg.ResX > AW || Cfg.ResY > AH))
+			{
+				const float K = FMath::Min(float(AW) / Cfg.ResX, float(AH) / Cfg.ResY) * 0.95f;
+				UE_LOG(LogSakura, Log, TEXT("Okno %dx%d nie mieści się na ekranie %dx%d — zmniejszam do %dx%d"), Cfg.ResX, Cfg.ResY, AW, AH, int32(Cfg.ResX * K), int32(Cfg.ResY * K));
+				Cfg.ResX = int32(Cfg.ResX * K); Cfg.ResY = int32(Cfg.ResY * K);
+			}
 			GUS->SetScreenResolution(FIntPoint(Cfg.ResX, Cfg.ResY));
 			GUS->SetFullscreenMode(Cfg.bFullscreen ? EWindowMode::WindowedFullscreen : EWindowMode::Windowed);
 		}
