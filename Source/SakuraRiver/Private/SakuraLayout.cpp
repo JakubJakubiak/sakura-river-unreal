@@ -66,15 +66,17 @@ namespace Sakura
 
 	static double Mountains(double X, double Z)
 	{
+		const double Dc = FMath::Sqrt(X * X + (Z + 60.0) * (Z + 60.0));
 		const double D = RiverDist(X, Z);
-		const double R = Ridged(X / 1100.0 + 3.1, Z / 1100.0 - 7.7, 6);
-		return Smooth(150, 2600, D) * (180 + 520 * R) + Smooth(120, 900, D) * Fbm(X / 260.0, Z / 260.0, 4) * 60;
+		const double R = Ridged(X / 1400.0 + 3.1, Z / 1400.0 - 7.7, 6);
+		const double Valley = Smooth(40, 400, D);
+		return (Smooth(1800, 6500, Dc) * (120 + 520 * R) + Smooth(250, 1600, Dc) * Fbm(X / 300.0, Z / 300.0, 4) * 40) * Valley;
 	}
 
 	double FarH(double X, double Z)
 	{
 		const double Ang = FMath::Abs(FMath::Atan2(X, -(Z - 27.0)));
-		const double Corridor = 0.4 + 0.6 * Smooth(0.06, 0.45, Ang);
+		const double Corridor = 0.35 + 0.65 * Smooth(0.05, 0.5, Ang);
 		return GroundH(X, Z, false) + Mountains(X, Z) * Corridor;
 	}
 

@@ -65,7 +65,7 @@ private:
 		bool bActive = false, bHasText = false, bHasLantern = false;
 		FString User;
 		FLinearColor Color = FLinearColor::White;
-		double Lane = 0, Z = 0, Speed = 1, Age = 0, Phase = 0;
+		double Lane = 0, Z = 0, Speed = 1, Age = 0, Phase = 0, LaneX = 0;
 		float Flare = 0;
 		FVector2D Size = FVector2D(400, 80);
 	};
@@ -75,7 +75,10 @@ private:
 	struct FShot { FString Time, View; };
 
 	void OnChatMsg(const FSakuraChatMessage& Msg);
-	void Release(const FPending& P);
+	bool Release(const FPending& P);
+	FVector2D MeasureText(const FString& Text, bool bName) const;
+	double StretchAt(const FVector& P) const;
+	bool FindLane(const FVector2D& SizePx, double& OutLane) const;
 	FFloat& Acquire();
 	void SetupText(FFloat& F, const FString& User, const FLinearColor& Col, const FString& Text);
 	void UpdateFloats(float Dt);
@@ -83,6 +86,8 @@ private:
 	void UpdateTime(float Dt);
 	void UpdateSparks(float Dt);
 	void UpdateShots(float Dt);
+	void UpdateBench(float Dt);
+	void RunCommand(const FString& Cmd, TMap<FString, FString>* Olds);
 	void HandleKeys();
 	void Demo(float Dt);
 	void Explode(const FVector& P, int32 Pattern);
@@ -130,7 +135,14 @@ private:
 	FString GraphicsPreset;
 	TArray<FShot> Shots;
 	int32 ShotIdx = -1;
-	float ShotTimer = 0.f, Warm = 0.f, StableShaders = 0.f;
+	float ShotTimer = 0.f, Warm = 0.f, StableShaders = 0.f, CaptureWait = -1.f;
+	bool bProfiled = false;
+	struct FBenchVariant { FString Name; TArray<FString> Cmds; };
+	TArray<FBenchVariant> BenchVariants;
+	int32 BenchIdx = -1;
+	float BenchTimer = 0.f;
+	TMap<FString, FString> BenchOlds;
+	double BenchBase = 0;
 	double BenchSum = 0, BenchGpu = 0; int32 BenchN = 0;
 	TArray<FString> BenchLines;
 	bool bNDIStarted = false;

@@ -161,7 +161,7 @@ def rain_streak():
 
 
 def spark():
-    bm = bmesh.new(); bmesh.ops.create_icosphere(bm, subdivisions=1, radius=0.5)
+    bm = bmesh.new(); bmesh.ops.create_icosphere(bm, subdivisions=2, radius=0.5)
     V = np.array([tuple(v.co) for v in bm.verts]); Tr = np.array([[v.index for v in f.verts] for f in bm.faces]); bm.free()
     return make_mesh("SM_Spark", V, Tr, ("spark",), uv=np.zeros((len(V), 2)))
 

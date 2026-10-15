@@ -327,6 +327,102 @@ def sugi_tree(name, seed):
     return make_mesh(name, np.stack([bx, by, bz], 1), T, ("bark", "blossom", "leaf"), tri_mat=M, uv=UV, col=C)
 
 
+
+# ---------- drzewa lasu z prawdziwymi liśćmi (Nanite Foliage, z daleka woksele) ----------
+def needle_template():
+    """Kępka igieł sugi: wydłużony, wąski liść zgięty w łuk."""
+    v = [(0, 0, 0), (-0.12, 0.3, 0.05), (-0.08, 0.7, 0.1), (0, 1.0, 0.06), (0.08, 0.7, 0.1), (0.12, 0.3, 0.05)]
+    t = [(0, 1, 2), (0, 2, 3), (0, 3, 4), (0, 4, 5)]
+    uv = [(0, 0), (0, 0.3), (0, 0.7), (0, 1), (1, 0.7), (1, 0.3)]
+    return np.array(v), np.array(t), np.array(uv)
+
+
+NV, NT, NUV = needle_template()
+
+
+def forest_tree(name, seed, kind="broad"):
+    rnd = random.Random(seed)
+    geo = Geo()
+    bark = srgb_to_lin(hexcol(0x4a3a2c if kind == "broad" else 0x5a3a28)).tolist() + [1.0]
+    tips = []                                   # (pozycja, kierunek na zewnątrz)
+    if kind == "broad":
+        H = rnd.uniform(10.0, 12.5)
+        greens = [0x4f7a34, 0x5c8a3a, 0x6b9440, 0x3f6a2e, 0x7a9a44]
+        crown_c = Vector((0, 0, H * 0.65))
+
+        def grow(p0, d, length, r0, depth):
+            n = max(3, int(length / 0.4)) + 1
+            pts, rad = [Vector(p0)], [r0]
+            dv = Vector(d).normalized()
+            for i in range(1, n):
+                t = i / (n - 1)
+                j = 0.03 if depth == 0 else 0.1
+                dv = (dv + Vector((rnd.gauss(0, j), rnd.gauss(0, j), rnd.gauss(0, j) + (0.06 if depth < 2 else -0.02)))).normalized()
+                pts.append(pts[-1] + dv * length / (n - 1)); rad.append(max(0.008, r0 * (1 - 0.65 * t)))
+            tube(geo, pts, rad, [12, 8, 5, 4, 3][depth], bark, 0)
+            if depth >= 2:
+                for i in range(1, len(pts)):
+                    tips.append((pts[i], (pts[i] - crown_c).normalized()))
+            if depth >= 4: return
+            nch = [5, 4, 4, 3][depth]
+            for k in range(nch):
+                t = rnd.uniform(0.55, 1.0) if depth == 0 else 0.3 + 0.7 * (k + rnd.random()) / nch
+                idx = min(len(pts) - 1, max(1, int(t * (len(pts) - 1))))
+                tan = (pts[idx] - pts[idx - 1]).normalized()
+                if depth == 0:
+                    az = k * TAU / nch + rnd.uniform(-0.4, 0.4); ang = math.radians(rnd.uniform(30, 55))
+                    cd = Vector((math.cos(az) * math.sin(ang), math.sin(az) * math.sin(ang), math.cos(ang)))
+                else:
+                    perp = tan.orthogonal().normalized(); perp.rotate(Quaternion(tan, rnd.uniform(0, TAU)))
+                    cd = tan.copy(); cd.rotate(Quaternion(tan.cross(perp).normalized(), math.radians(rnd.uniform(30, 55))))
+                grow(pts[idx], cd, length * rnd.uniform(0.5, 0.7), rad[idx] * 0.65, depth + 1)
+
+        grow(Vector((0, 0, -0.4)), Vector((rnd.uniform(-0.05, 0.05), rnd.uniform(-0.05, 0.05), 1)), H * 0.45, 0.28, 0)
+        leaves_c, leaves_n, leaves_s, leaves_col = [], [], [], []
+        P = np.array([tuple(t[0]) for t in tips]); cc = P.mean(0); ext = np.percentile(np.linalg.norm(P - cc, axis=1), 90)
+        for (p, outd) in tips:
+            ao = float(np.clip(0.35 + 0.7 * np.linalg.norm(np.array(tuple(p)) - cc) / max(ext, 1e-3), 0.35, 1.0))
+            g = srgb_to_lin(hexcol(rnd.choice(greens)))
+            for f in range(rnd.randint(9, 14)):
+                off = Vector((rnd.gauss(0, 1), rnd.gauss(0, 1), rnd.gauss(0, 1))) * 0.3
+                leaves_c.append(tuple(p + off)); leaves_n.append(tuple((outd * 0.7 + off.normalized() + Vector((0, 0, 0.4))).normalized()))
+                leaves_s.append(rnd.uniform(0.18, 0.28))
+                leaves_col.append(np.concatenate([g * rnd.uniform(0.85, 1.12), [ao]]))
+        scatter(geo, (LV, LT, LUV), leaves_c, leaves_n, leaves_s, np.array(leaves_col), rnd, 2)
+    else:
+        # sugi: prosty pień do czubka, poziome okółki krótkich gałęzi z kępkami igieł, stożkowa sylwetka
+        H = rnd.uniform(17.0, 22.0)
+        tube(geo, [Vector((0, 0, -0.5)), Vector((0, 0, H * 0.5)), Vector((rnd.uniform(-0.1, 0.1), rnd.uniform(-0.1, 0.1), H))], [0.36, 0.22, 0.03], 10, bark, 0)
+        needles_c, needles_n, needles_s, needles_col = [], [], [], []
+        dark = [0x2c4a2c, 0x34522f, 0x27432a, 0x3a5a33]
+        z = H * 0.28
+        while z < H - 0.3:
+            t = (z - H * 0.28) / (H * 0.72)
+            R = (1 - t) ** 1.1 * 2.6 + 0.25
+            nb = rnd.randint(7, 10)
+            for b in range(nb):
+                az = b * TAU / nb + rnd.uniform(-0.3, 0.3)
+                d = Vector((math.cos(az), math.sin(az), rnd.uniform(-0.15, 0.1))).normalized()
+                pts = [Vector((0, 0, z)), Vector((0, 0, z)) + d * R * 0.5 + Vector((0, 0, -0.1)), Vector((0, 0, z)) + d * R + Vector((0, 0, -0.25))]
+                tube(geo, pts, [0.05 * (1 - t) + 0.015, 0.02, 0.008], 4, bark, 0)
+                for q in range(int(10 + 16 * R)):
+                    u = rnd.uniform(0.25, 1.0)
+                    p = pts[0].lerp(pts[2], u) + Vector((rnd.gauss(0, 0.18), rnd.gauss(0, 0.18), rnd.gauss(0, 0.12) + 0.1))
+                    ao = 0.45 + 0.55 * u
+                    g = srgb_to_lin(hexcol(rnd.choice(dark)))
+                    for k in range(5):
+                        n = (d * 0.6 + Vector((rnd.gauss(0, 0.6), rnd.gauss(0, 0.6), rnd.uniform(0.2, 0.9)))).normalized()
+                        needles_c.append(tuple(p)); needles_n.append(tuple(n)); needles_s.append(rnd.uniform(0.3, 0.45))
+                        needles_col.append(np.concatenate([g * rnd.uniform(0.85, 1.15), [ao]]))
+            z += rnd.uniform(0.38, 0.55)
+        scatter(geo, (NV, NT, NUV), needles_c, needles_n, needles_s, np.array(needles_col), rnd, 2)
+    V, T, UV, C, M = geo.arrays()
+    bx, by, bz = web_to_bl(V[:, 0], V[:, 2], -V[:, 1])
+    ob = make_mesh(name, np.stack([bx, by, bz], 1), T, ("bark", "blossom", "leaf"), tri_mat=M, uv=UV, col=C)
+    print(f"[sakura] {name}: {len(T):,} trójkątów")
+    return ob
+
+
 def grass_patch(name, seed, n=340, size=2.0):
     """Kępa trawy: zakrzywione, zwężające się źdźbła (5 trójkątów), u nasady ciemniejsze."""
     rnd = random.Random(seed); geo = Geo()
@@ -359,8 +455,8 @@ if __name__ == "__main__":
         ("SM_Sakura_A", lambda: cherry("SM_Sakura_A", 11, PALS[0], height=6.6, spread=1.0, flowers_per_cluster=(4, 7))),
         ("SM_Sakura_B", lambda: cherry("SM_Sakura_B", 41, PALS[1], height=7.4, spread=1.1, flowers_per_cluster=(4, 7))),
         ("SM_Sakura_C", lambda: cherry("SM_Sakura_C", 37, PALS[1], height=6.2, spread=1.0, weeping=True, flowers_per_cluster=(2, 3))),
-        ("SM_Tree_Broad", lambda: broad_tree("SM_Tree_Broad", 5)),
-        ("SM_Tree_Sugi", lambda: sugi_tree("SM_Tree_Sugi", 7)),
+        ("SM_Tree_Broad", lambda: forest_tree("SM_Tree_Broad", 5, "broad")),
+        ("SM_Tree_Sugi", lambda: forest_tree("SM_Tree_Sugi", 7, "sugi")),
         ("SM_GrassPatch", lambda: grass_patch("SM_GrassPatch", 3)),
     ]
     for name, fn in jobs:

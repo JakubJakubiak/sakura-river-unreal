@@ -4,6 +4,12 @@ Interaktywne tło na stream w japońskim stylu, wersja HD wersji przeglądarkowe
 To osobny program (okno 1920×1080), który dodaje się w OBS jako **Przechwytywanie gry/okna** albo przez **NDI**. Reaguje na czat Twitcha:
 każda wiadomość płynie rzeką, komendy zmieniają porę dnia i pogodę, suby, bity i raidy odpalają fajerwerki.
 
+![Dzień nad rzeką](Docs/img/day_river.jpg)
+
+| Zachód z mostu | Noc z fajerwerkami |
+|---|---|
+| ![Zachód](Docs/img/sunset_bridge.jpg) | ![Noc](Docs/img/night_river.jpg) |
+
 ## Co w nim jest
 
 | | |
@@ -24,9 +30,10 @@ Wszystkie materiały są proceduralne (HLSL w [Shaders/Sakura.ush](Shaders/Sakur
 3. W OBS: **Źródła → + → Przechwytywanie gry** (Windows) albo **Przechwytywanie okna** / **macOS Screen Capture → okno** i wybierz „Sakura River HD”.
 
 ### Zminimalizowane okno
-Żadna gra nie rysuje obrazu, kiedy jej okno jest zminimalizowane (system nie daje mu powierzchni). Zamiast minimalizować, wybierz jedną z opcji:
-- **zasłoń okno innymi albo przenieś je na drugi pulpit**. Przechwytywanie gry (Windows) i okna (macOS) działa także dla zasłoniętego okna;
-- **NDI**: ustaw `ndi = 1` w `Sakura.ini`, a w OBS dodaj źródło **NDI Source** (wtyczka [DistroAV](https://github.com/DistroAV/DistroAV) i NDI Runtime). Obraz idzie siecią lokalną, okno może być gdziekolwiek.
+Silnik (Slate) normalnie przestaje rysować zminimalizowane okno. Sakura River HD to wyłącza: przy `minimized = 1` (domyślnie) program rysuje dalej także po zminimalizowaniu.
+- **Windows + OBS „Przechwytywanie gry”**: obraz idzie dalej przy zminimalizowanym oknie (OBS przechwytuje klatki, które gra wysyła na ekran).
+- **NDI** (`ndi = 1`, w OBS źródło **NDI Source**, wtyczka [DistroAV](https://github.com/DistroAV/DistroAV) i NDI Runtime): obraz idzie siecią lokalną, okno może być gdziekolwiek.
+- **macOS „Przechwytywanie okna”** (ScreenCaptureKit) nie pokazuje zminimalizowanych okien niezależnie od programu. Na Macu zasłoń okno innymi albo użyj NDI.
 
 ## Ustawienia (`Sakura.ini` albo linia poleceń)
 
@@ -36,7 +43,7 @@ Wszystkie materiały są proceduralne (HLSL w [Shaders/Sakura.ush](Shaders/Sakur
 | `time` | `dawn` `day` `sunset` `night` albo godzina (`19.5`) | pora dnia |
 | `cycle` | minuty | pełna doba w tylu minutach (0 = stała pora) |
 | `view` | `river` `fuji` `bridge` `bridge2` `bridgeside` `pagoda` | punkt widokowy (rzeka zawsze w kadrze) |
-| `graphics` | `auto` `low` `medium` `high` `ultra` `rtx` `cinematic` | jakość; `auto` = `rtx`, jeśli karta ma sprzętowy RT |
+| `graphics` | `auto` `low` `medium` `high` `ultra` `rtx` `cinematic` | jakość; `auto`: PC z kartą RT → `rtx`, PC bez RT → `ultra`, Mac → `high` |
 | `text` / `lanterns` / `names` | 0/1 | napisy na wodzie / lampiony ze światłem / nicki |
 | `textsize` | 0.4–3 | wielkość napisów |
 | `petals` / `fireflies` | 0/1 | płatki / świetliki nocą |
@@ -45,6 +52,7 @@ Wszystkie materiały są proceduralne (HLSL w [Shaders/Sakura.ush](Shaders/Sakur
 | `hold` | sekundy | ile trzyma się pora dnia ustawiona z czatu |
 | `cooldown` | sekundy | globalny cooldown komend (mod, VIP i streamer omijają) |
 | `res`, `fullscreen`, `fps` | `1920x1080`, 0/1, liczba | okno i limit klatek |
+| `minimized` | 0/1 | rysuj dalej po zminimalizowaniu okna (domyślnie 1) |
 | `ndi`, `ndiname` | 0/1, nazwa | wyjście NDI |
 
 Przykład: `SakuraRiver.exe -channel=twojkanal -time=night -view=bridge -graphics=rtx`
@@ -53,6 +61,17 @@ Przykład: `SakuraRiver.exe -channel=twojkanal -time=night -view=bridge -graphic
 
 `!sakura` (płatki), `!wiatr`, `!deszcz` (włącza/wyłącza), `!hanabi` (fajerwerki), `!swit` `!dzien` `!zachod` `!noc`, `!most` `!rzeka` `!fuji` `!pagoda` (widok). Działają też angielskie (`!wind !rain !fireworks !dawn !day !sunset !night !bridge !river`).
 Bity (od 100), suby, gifty i raidy odpalają fajerwerki samoczynnie.
+
+## Wydajność (zmierzona)
+
+Apple M5 (10 rdzeni GPU), 1920×1080, uruchomienie z edytora (paczka Shipping jest szybsza):
+
+| preset | GPU / klatkę |
+|---|---|
+| `high` (75% rozdzielczości + TSR, sprzętowy RT) | 50–55 ms w dzień, 65 ms nocą z fajerwerkami |
+| `rtx` (100%, RT, odbicia z oświetleniem trafień) | ok. 150 ms |
+
+Najwięcej kosztują: Lumen GI, cienie chmur (tylko w `cinematic`), wiśnie, odbicia wody i mgła wolumetryczna. Trawa, las, kamienie i wiatr w Nanite razem to ok. 2 ms. Pomiar w każdej chwili: `Tools/run.sh -bench` (wypisuje koszt każdego elementu).
 
 ## Klawisze (w oknie programu)
 

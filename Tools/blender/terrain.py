@@ -44,7 +44,7 @@ def near_h(X, Z):
 def far_h(X, Z):
     # korytarz widoku: na wprost zwykłej kamery (x=0, z=27) góry są niższe, żeby Fuji wystawała nad grzbiety
     ang = np.abs(np.arctan2(X - 0.0, -(Z - 27.0)))
-    corridor = 0.4 + 0.6 * smooth(0.06, 0.45, ang)
+    corridor = 0.35 + 0.65 * smooth(0.05, 0.5, ang)
     return ground_h(X, Z, hd=False) + mountains(X, Z) * corridor
 
 

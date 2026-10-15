@@ -46,6 +46,7 @@ namespace
 			if (V.Split(TEXT("x"), &A, &B)) { C.ResX = FMath::Max(320, FCString::Atoi(*A)); C.ResY = FMath::Max(240, FCString::Atoi(*B)); }
 		}
 		else if (K == TEXT("fullscreen")) C.bFullscreen = ToBool(V);
+		else if (K == TEXT("minimized") || K == TEXT("minimised")) C.bRenderMinimized = ToBool(V);
 		else if (K == TEXT("ndi")) C.bNDI = ToBool(V);
 		else if (K == TEXT("ndiname")) C.NDIName = V;
 		else if (K == TEXT("shots")) C.Shots = V;
@@ -56,7 +57,7 @@ namespace
 	const TCHAR* Keys[] = {
 		TEXT("channel"), TEXT("demo"), TEXT("time"), TEXT("cycle"), TEXT("view"), TEXT("graphics"), TEXT("text"), TEXT("lanterns"),
 		TEXT("lantern"), TEXT("names"), TEXT("petals"), TEXT("fireflies"), TEXT("hud"), TEXT("camera"), TEXT("cameraevery"), TEXT("max"),
-		TEXT("hold"), TEXT("cooldown"), TEXT("textsize"), TEXT("flow"), TEXT("fps"), TEXT("res"), TEXT("fullscreen"), TEXT("ndi"),
+		TEXT("hold"), TEXT("cooldown"), TEXT("textsize"), TEXT("flow"), TEXT("fps"), TEXT("res"), TEXT("fullscreen"), TEXT("minimized"), TEXT("ndi"),
 		TEXT("ndiname"), TEXT("shots"), TEXT("shotdir"), TEXT("shotwait")
 	};
 }

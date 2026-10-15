@@ -40,6 +40,8 @@ namespace
 		if (FVector2D::Distance({X, Z}, {PagodaX, PagodaZ}) < 9.5) return true;            // pagoda
 		if (FMath::Abs(Z - BridgeZ) < 4.0 && FMath::Abs(FMath::Abs(X) - 14.5) < 4.0) return true;   // przyczółki mostu
 		if (FVector2D::Distance({X, Z}, {-13.2, -10.0}) < 3.0) return true;                  // torii
+		static const FVector2D Eyes[] = { {-1.5, 27.0}, {0.0, 27.0}, {13.5, -9.0}, {2.0, -23.0}, {2.25, -25.0} };   // punkty widokowe kamery
+		for (const FVector2D& E : Eyes) if (FVector2D::Distance({X, Z}, E) < 5.5) return true;
 		return false;
 	}
 
@@ -223,14 +225,15 @@ void ASakuraWorld::Build()
 	}
 	Clouds->SetLayerBottomAltitude(3.0f);
 	Clouds->SetLayerHeight(8.0f);
-	Atmosphere->SetAerialPespectiveViewDistanceScale(2.2f);
+	Atmosphere->SetAerialPespectiveViewDistanceScale(1.0f);
 	Atmosphere->SetMultiScatteringFactor(1.0f);
 	Atmosphere->SetHeightFogContribution(1.0f);
 
 	Fog->SetVolumetricFog(true);
 	Fog->SetVolumetricFogScatteringDistribution(0.55f);
 	Fog->SetVolumetricFogDistance(9000.f);
-	Fog->SetFogHeightFalloff(0.22f);
+	Fog->SetFogHeightFalloff(0.35f);
+	Fog->SetFogMaxOpacity(0.85f);
 	Fog->SetStartDistance(0.f);
 
 	FPostProcessSettings& S = Post->Settings;
@@ -240,9 +243,9 @@ void ASakuraWorld::Build()
 	S.bOverride_BloomIntensity = true; S.BloomIntensity = 0.55f;
 	S.bOverride_VignetteIntensity = true; S.VignetteIntensity = 0.32f;
 	S.bOverride_bMegaLights = true; S.bMegaLights = true;
-	S.bOverride_LumenFinalGatherQuality = true; S.LumenFinalGatherQuality = 2.f;
-	S.bOverride_LumenReflectionQuality = true; S.LumenReflectionQuality = 2.f;
-	S.bOverride_LumenSceneLightingQuality = true; S.LumenSceneLightingQuality = 1.5f;
+	S.bOverride_LumenFinalGatherQuality = true; S.LumenFinalGatherQuality = 1.f;
+	S.bOverride_LumenReflectionQuality = true; S.LumenReflectionQuality = 1.f;
+	S.bOverride_LumenSceneLightingQuality = true; S.LumenSceneLightingQuality = 1.f;
 	S.bOverride_LumenMaxTraceDistance = true; S.LumenMaxTraceDistance = 60000.f;
 
 	PlaceVegetation();
@@ -278,7 +281,9 @@ void ASakuraWorld::PlaceVegetation()
 	for (int32 I = 0; I < UE_ARRAY_COUNT(Trees); ++I)
 	{
 		const auto& T = Trees[I];
-		const double Z = T[1], X = RiverCx(Z) + T[0] * (RiverHalf(Z) + T[2]);
+		const double Z = T[1];
+		double X = RiverCx(Z) + T[0] * (RiverHalf(Z) + T[2]);
+		if (Blocked(X, Z)) X += T[0] * 6.0;                    // z punktu widokowego odsuwamy drzewo dalej od rzeki
 		int32 V = (I == 2 || I == 6 || I == 12) ? 2 : (int32(T[4]) == 1 ? 1 : 0);
 		C[V].Add(WebTransform(X, TerrainHeight(X, Z) - 0.15, Z, R.FRandRange(0, 2 * PI), T[3] * 0.95));
 	}
@@ -435,17 +440,17 @@ void ASakuraWorld::ApplyLighting()
 	Moon->SetWorldRotation((-MoonDir).Rotation());
 	Moon->SetIntensity(0.5f * Night * FMath::SmoothStep(-2.f, 6.f, float(FMath::RadiansToDegrees(MoonEl))) * (1.f - 0.6f * Rain));
 	Moon->SetVisibility(Night > 0.01f);
-	SkyLight->SetIntensity(1.f + Night * 2.5f);
+	SkyLight->SetIntensity(1.f + Night * 0.8f);
 
 	// ekspozycja: dzień EV100 ~12–15, noc ~-2.5..-1 (światło księżyca)
 	FPostProcessSettings& S = Post->Settings;
 	S.AutoExposureMinBrightness = FMath::Lerp(10.5f, -2.8f, Night);
-	S.AutoExposureMaxBrightness = FMath::Lerp(15.0f, -1.0f, Night);
-	S.AutoExposureBias = FMath::Lerp(0.2f, 0.6f, Night) + Sunset * 0.2f;
+	S.AutoExposureMaxBrightness = FMath::Lerp(15.0f, 0.5f, Night);
+	S.AutoExposureBias = FMath::Lerp(0.2f, -0.5f, Night) + Sunset * 0.2f;
 	S.BloomIntensity = FMath::Lerp(0.45f, 0.85f, Night);
 
-	Fog->SetFogDensity(0.010f + 0.035f * Dawn + 0.008f * Night + 0.03f * Rain);
-	Fog->SetVolumetricFogExtinctionScale(1.0f + 1.5f * Night + 2.0f * Dawn);
+	Fog->SetFogDensity(0.004f + 0.02f * Dawn + 0.001f * Night + 0.02f * Rain);
+	Fog->SetVolumetricFogExtinctionScale(1.0f + 0.5f * Night + 2.0f * Dawn);
 
 	const float LampOn = FMath::Pow(FMath::SmoothStep(0.15f, 0.85f, Night), 1.5f);
 	for (int32 I = 0; I < LampLights.Num(); ++I)

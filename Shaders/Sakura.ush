@@ -85,13 +85,17 @@ float3 SkTerrain(float3 wp, float4 vc, float3 vn, float3 cam, float wet, float n
 	float3 bed = lerp(SkSrgb(float3(0.62, 0.58, 0.46)), SkSrgb(float3(0.45, 0.47, 0.40)) * (0.7 + 0.6 * SkHash21(pc)), peb);
 	bed = lerp(bed, SkSrgb(float3(0.35, 0.42, 0.25)), smoothstep(0.55, 0.75, mid.x) * 0.5);   // glony
 	// skała
-	float strata = SkFbm(float2(p.x * 0.3, wp.z / 100.0 * 2.0), 3);
+	float strata = lerp(SkFbm(float2(p.x * 0.3, wp.z / 100.0 * 2.0), 3), 0.5, lod);
 	float3 rock = SkSrgb(float3(0.52, 0.51, 0.48)) * (0.7 + 0.45 * strata);
 
 	float3 col = grass;
 	col = lerp(col, sand, saturate(vc.r));
 	col = lerp(col, bed, saturate(vc.g));
-	col = lerp(col, rock, saturate(vc.b) * 0.9);
+	// z daleka wzgórza i góry porasta las: ciemna, plamista zieleń zamiast łąki i skalnych pasków
+	float farF = smoothstep(140.0, 520.0, dist);
+	float3 forest = lerp(SkSrgb(float3(0.17, 0.29, 0.13)), SkSrgb(float3(0.27, 0.36, 0.18)), SkFbm(p * 0.02, 3)) * (0.75 + 0.5 * big.x);
+	col = lerp(col, forest, farF * (1.0 - saturate(vc.g)));
+	col = lerp(col, rock, saturate(vc.b) * 0.9 * (1.0 - farF * 0.7));
 	// śnieg na wysokich górach
 	float snow = smoothstep(820.0, 1000.0, wp.z / 100.0 + (big.x - 0.5) * 220.0) * smoothstep(0.35, 0.75, vn.z);
 	col = lerp(col, float3(0.92, 0.94, 0.97), snow);
@@ -116,8 +120,8 @@ float3 SkFuji(float3 wp, float4 vc, float3 vn, float night, out float rough)
 {
 	float h = vc.a;                                     // 0 szczyt .. 1 podstawa (promień)
 	float n = SkFbm(wp.xy / 100.0 * 0.004, 4);
-	float line = 0.30 + (n - 0.5) * 0.18 + vc.b * 0.22;  // w żlebach śnieg schodzi niżej
-	float snow = 1.0 - smoothstep(line - 0.03, line + 0.03, h);
+	float snowLine = 0.30 + (n - 0.5) * 0.18 + vc.b * 0.22;  // w żlebach śnieg schodzi niżej
+	float snow = 1.0 - smoothstep(snowLine - 0.03, snowLine + 0.03, h);
 	float3 slope = lerp(SkSrgb(float3(0.32, 0.36, 0.42)), SkSrgb(float3(0.36, 0.42, 0.30)), smoothstep(0.55, 0.9, h));
 	slope *= 0.8 + 0.4 * SkFbm(wp.xy / 100.0 * 0.02, 3);
 	rough = lerp(0.9, 0.55, snow);
@@ -313,7 +317,7 @@ float3 SkNightSky(float3 dir, float3 moonDir, float night, float t)
 		star *= 0.6 + 0.4 * sin(t * (2.0 + h * 3.0) + h * 60.0);
 		float3 sc = lerp(float3(0.75, 0.85, 1.0), float3(1.0, 0.9, 0.75), frac(h * 37.0));
 		float band = exp(-pow(dot(dir, normalize(float3(0.35, -0.6, 0.72))) * 3.2, 2.0)) * SkNoise3(dir * 6.0) * 0.6;
-		col += (star * sc * 6.0 + band * float3(0.18, 0.2, 0.3)) * up;
+		col += (star * sc * 0.35 + band * float3(0.006, 0.007, 0.011)) * up;
 		// księżyc: tarcza z kraterami + poświata
 		float ca = dot(dir, moonDir);
 		float R = 0.0105;
@@ -321,8 +325,8 @@ float3 SkNightSky(float3 dir, float3 moonDir, float night, float t)
 		float3 md = normalize(cross(moonDir, float3(0, 0, 1)) + 1e-4); float3 mu = cross(md, moonDir);
 		float2 mp = float2(dot(dir, md), dot(dir, mu)) / R;
 		float cr = SkFbm(mp * 3.0 + 5.0, 4);
-		float3 moon = float3(1.0, 0.97, 0.9) * (0.65 + 0.45 * cr) * 30.0;
-		float halo = pow(saturate(ca), 900.0) * 0.6 + pow(saturate(ca), 60.0) * 0.08;
+		float3 moon = float3(1.0, 0.97, 0.9) * (0.65 + 0.45 * cr) * 1.5;
+		float halo = pow(saturate(ca), 2500.0) * 0.25 + pow(saturate(ca), 300.0) * 0.012;
 		col += disk * moon + halo * float3(0.6, 0.7, 0.9);
 	}
 	return col * night;

@@ -4,11 +4,15 @@
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#include "Components/PostProcessComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "Engine/GameViewportClient.h"
+#include "Widgets/SWindow.h"
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Fonts/FontMeasure.h"
@@ -19,6 +23,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
 #include "RenderUtils.h"
 #include "RHI.h"
 #include "Scalability.h"
@@ -162,6 +167,14 @@ void ASakuraDirector::BeginPlay()
 
 	ApplyGraphics(Cfg.Graphics);
 
+	// Slate pomija rysowanie zminimalizowanych okien, chyba że aplikacja korzysta z „fokusu VR”. Ustawiamy go na stałe:
+	// okno rysuje się dalej po zminimalizowaniu, więc OBS (przechwytywanie gry, NDI) nie dostaje czarnego obrazu.
+	if (Cfg.bRenderMinimized && !GIsEditor)
+	{
+		FApp::SetUseVRFocus(true);
+		FApp::SetHasVRFocus(true);
+	}
+
 	// kamera
 	Camera = GetWorld()->SpawnActor<ACameraActor>();
 	Camera->GetCameraComponent()->SetFieldOfView(72.7f);
@@ -213,7 +226,7 @@ void ASakuraDirector::BeginPlay()
 				const double Z = R.FRandRange(-70, 32), Side = R.FRand() < 0.5 ? -1 : 1;
 				const double Xw = RiverCx(Z) + Side * (RiverHalf(Z) + R.FRandRange(-1.5, 9.0));
 				const double Y = FMath::Max(0.0, TerrainHeight(Xw, Z)) + R.FRandRange(0.4, 2.4);
-				X.Add(FTransform(FRotator::ZeroRotator, W(Xw, Y, Z), FVector(0.07)));
+				X.Add(FTransform(FRotator::ZeroRotator, W(Xw, Y, Z), FVector(1.0)));     // rozmiar ustala materiał
 			}
 			Fireflies->AddInstances(X, false);
 			for (int32 I = 0; I < X.Num(); ++I) { const FVector P = X[I].GetLocation(); Fireflies->SetCustomData(I, { float(P.X), float(P.Y), float(P.Z) }, false); }
@@ -259,17 +272,22 @@ void ASakuraDirector::EndPlay(const EEndPlayReason::Type Reason)
 void ASakuraDirector::ApplyGraphics(const FString& PresetIn)
 {
 	FString P = PresetIn.ToLower();
-	if (P.IsEmpty() || P == TEXT("auto")) P = IsRayTracingEnabled() ? TEXT("rtx") : TEXT("ultra");
 	auto Set = [](const TCHAR* Name, float V)
 	{
 		if (IConsoleVariable* C = IConsoleManager::Get().FindConsoleVariable(Name)) C->Set(V, ECVF_SetByCode);
 	};
-	int32 Q = 3; float SP = 100.f; bool bHW = false; float Veg = 1.f;
+	int32 Q = 3; float SP = 100.f; bool bHW = false; float Veg = 1.f; bool bCloudShadows = false; float LumenQ = 1.f;
+	if (P == TEXT("auto") || P.IsEmpty()) P = TEXT("auto");
+	if (P == TEXT("auto"))
+	{
+		// Mac (Apple GPU): high z 75% rozdzielczości i RT; PC z kartą RT: rtx; bez RT: ultra
+		P = PLATFORM_MAC ? TEXT("high") : (IsRayTracingEnabled() ? TEXT("rtx") : TEXT("ultra"));
+	}
 	if (P == TEXT("low"))            { Q = 0; SP = 60.f; Veg = 0.f; }
-	else if (P == TEXT("medium"))    { Q = 1; SP = 70.f; Veg = 0.5f; }
-	else if (P == TEXT("high"))      { Q = 2; SP = 80.f; Veg = 0.8f; }
+	else if (P == TEXT("medium"))    { Q = 1; SP = 67.f; Veg = 0.5f; }
+	else if (P == TEXT("high"))      { Q = 2; SP = 75.f; Veg = 0.85f; bHW = true; }
 	else if (P == TEXT("rtx"))       { Q = 3; bHW = true; }
-	else if (P == TEXT("cinematic")) { Q = 4; bHW = true; }
+	else if (P == TEXT("cinematic")) { Q = 4; bHW = true; bCloudShadows = true; LumenQ = 2.f; }
 	else                             { P = TEXT("ultra"); }
 	Scalability::FQualityLevels L;
 	L.SetFromSingleQualityLevel(Q);
@@ -279,6 +297,12 @@ void ASakuraDirector::ApplyGraphics(const FString& PresetIn)
 	Set(TEXT("r.Lumen.HardwareRayTracing"), (bHW && bCanHW) ? 1.f : 0.f);
 	Set(TEXT("r.Lumen.HardwareRayTracing.LightingMode"), (bHW && bCanHW) ? 2.f : 0.f);   // odbicia z oświetleniem w miejscu trafienia
 	Set(TEXT("r.MegaLights.HardwareRayTracing"), (bHW && bCanHW) ? 1.f : 0.f);
+	Set(TEXT("r.VolumetricCloud.ShadowMap"), bCloudShadows ? 1.f : 0.f);        // cienie chmur: ~20 ms na M5, prawie niewidoczne
+	if (World)
+	{
+		World->Post->Settings.LumenFinalGatherQuality = LumenQ;
+		World->Post->Settings.LumenReflectionQuality = LumenQ;
+	}
 	if (World && !FMath::IsNearlyEqual(World->VegetationDensity, Veg)) World->SetVegetationDensity(Veg);
 	GraphicsPreset = (bHW && !bCanHW) ? P + TEXT(" (bez RT — karta nie obsługuje)") : P;
 	UE_LOG(LogSakura, Log, TEXT("Grafika: %s (skalowalność %d, rozdzielczość %d%%, sprzętowy RT %s)"), *GraphicsPreset, Q, int32(SP), (bHW && bCanHW) ? TEXT("tak") : TEXT("nie"));
@@ -328,7 +352,12 @@ void ASakuraDirector::UpdateTime(float Dt)
 
 // ------------------------------------------------------------------ czat
 
-void ASakuraDirector::OnChatMsg(const FSakuraChatMessage& Msg) { Chat(Msg); }
+void ASakuraDirector::OnChatMsg(const FSakuraChatMessage& Msg)
+{
+	static int32 Logged = 0;
+	if (Logged < 12) { ++Logged; UE_LOG(LogSakura, Log, TEXT("Czat: %s: %s"), *Msg.User, *Msg.Text.Left(80)); }
+	Chat(Msg);
+}
 
 void ASakuraDirector::Chat(const FSakuraChatMessage& Msg)
 {
@@ -426,6 +455,16 @@ void ASakuraDirector::SetupText(FFloat& F, const FString& User, const FLinearCol
 	F.NameBlock->SetColorAndOpacity(FSlateColor(Col));
 	F.NameBlock->SetVisibility(bName ? EVisibility::Visible : EVisibility::Collapsed);
 	F.TextBlock->SetText(FText::FromString(Text));
+	const FVector2D Sz = MeasureText(Text, bName);
+	F.Size = Sz;
+	F.Text->SetDrawSize(Sz);
+	F.Text->SetVisibility(true);
+	F.Text->RequestRedraw();
+}
+
+
+FVector2D ASakuraDirector::MeasureText(const FString& Text, bool bName) const
+{
 	// rozmiar płótna z pomiaru czcionki (zawijanie przy 1150 px)
 	FVector2D Sz(Text.Len() * 24.0, 60.0);
 	if (FSlateApplication::IsInitialized())
@@ -435,15 +474,53 @@ void ASakuraDirector::SetupText(FFloat& F, const FString& User, const FLinearCol
 		const int32 Lines = FMath::Max(1, FMath::CeilToInt32(One.X / 1150.0));
 		Sz = FVector2D(FMath::Min(One.X, 1150.0), One.Y * Lines);
 	}
-	Sz += FVector2D(48.0, bName ? 52.0 : 16.0);
-	F.Size = Sz;
-	F.Text->SetDrawSize(Sz);
-	F.Text->SetVisibility(true);
-	F.Text->RequestRedraw();
+	return Sz + FVector2D(48.0, bName ? 52.0 : 16.0);
 }
 
-void ASakuraDirector::Release(const FPending& P)
+double ASakuraDirector::StretchAt(const FVector& P) const
 {
+	const FVector Cam = Camera ? Camera->GetActorLocation() : FVector::ZeroVector;
+	const double SinA = FMath::Max(Cam.Z, 50.0) / FMath::Max(FVector::Dist(Cam, P), 1.0);
+	return FMath::Clamp(0.42 / SinA, 1.0, 7.0) * Cfg.TextScale;
+}
+
+bool ASakuraDirector::FindLane(const FVector2D& SizePx, double& OutLane) const
+{
+	// wolny tor przy starcie: napis nie może zachodzić na inne (szerokość w poprzek rzeki, długość z rozciągnięciem wzdłuż nurtu)
+	double Z0, Z1; FlowRange(Z0, Z1);
+	const double Half = RiverHalf(Z0) - 1.0;
+	const double Wm = SizePx.X / 100.0 * Cfg.TextScale;
+	const double Dm = SizePx.Y / 100.0 * StretchAt(W(RiverCx(Z0), 0.0, Z0));
+	const double MaxX = FMath::Max(0.0, Half - Wm * 0.5);
+	double Best = 0, BestScore = -1;
+	for (int32 K = 0; K < 12; ++K)
+	{
+		const double X = (K == 0 ? 0.0 : FMath::FRandRange(-1.0, 1.0)) * MaxX;
+		double Score = 1e9;
+		bool bOk = true;
+		for (const FFloat& F : Floats)
+		{
+			if (!F.bActive || !F.bHasText) continue;
+			const double Fd = F.Size.Y / 100.0 * StretchAt(W(RiverCx(F.Z) + F.LaneX, 0.0, F.Z));
+			const double Fw = F.Size.X / 100.0 * Cfg.TextScale;
+			const double Dz = FMath::Abs(F.Z - Z0) - (Fd + Dm) * 0.5 - 0.6;
+			const double Dx = FMath::Abs(F.LaneX - X) - (Fw + Wm) * 0.5 - 0.4;
+			if (Dz < 0 && Dx < 0) { bOk = false; break; }
+			Score = FMath::Min(Score, FMath::Max(Dz, Dx));
+		}
+		if (bOk && Score > BestScore) { BestScore = Score; Best = X; }
+	}
+	if (BestScore < 0) return false;
+	OutLane = Best;
+	return true;
+}
+
+bool ASakuraDirector::Release(const FPending& P)
+{
+	double LaneX = 0.0;
+	const bool bName = Cfg.bNames && !P.User.IsEmpty();
+	if (!P.Text.IsEmpty() && !FindLane(MeasureText(P.Text, bName), LaneX)) return false;     // tor zajęty — poczekaj w kolejce
+	if (P.Text.IsEmpty()) LaneX = FMath::FRandRange(-0.7, 0.7) * RiverHalf(-20.0);
 	FFloat& F = Acquire();
 	if (F.bActive && F.bHasLantern) LanternByUser.Remove(F.User.ToLower());
 	F.bActive = true;
@@ -455,19 +532,7 @@ void ASakuraDirector::Release(const FPending& P)
 	F.Speed = Cfg.FlowSpeed * FMath::FRandRange(0.88f, 1.12f);
 	double Z0, Z1; FlowRange(Z0, Z1);
 	F.Z = Z0;
-	// tor w poprzek rzeki: jak najdalej od kilku ostatnich
-	double Best = 0, BestScore = -1;
-	for (int32 K = 0; K < 8; ++K)
-	{
-		const double L = FMath::FRandRange(-0.78, 0.78);
-		double Score = 10;
-		for (double R : RecentLanes) Score = FMath::Min(Score, FMath::Abs(R - L));
-		if (Score > BestScore) { BestScore = Score; Best = L; }
-	}
-	F.Lane = Best;
-	RecentLanes.Add(Best);
-	if (RecentLanes.Num() > 4) RecentLanes.RemoveAt(0);
-
+	F.LaneX = LaneX;
 	F.bHasText = !P.Text.IsEmpty();
 	if (F.bHasText) SetupText(F, P.User, P.Color, P.Text);
 	else if (F.Text) F.Text->SetVisibility(false);
@@ -501,6 +566,7 @@ void ASakuraDirector::Release(const FPending& P)
 		LanternByUser.Add(P.User.ToLower(), int32(&F - Floats.GetData()));
 	}
 	else if (F.Lantern) F.Lantern->SetVisibility(false, true);
+	return true;
 }
 
 void ASakuraDirector::FlowRange(double& Z0, double& Z1) const
@@ -515,9 +581,12 @@ void ASakuraDirector::UpdateFloats(float Dt)
 	ReleaseIn -= Dt;
 	if (Queue.Num() && ReleaseIn <= 0.f)
 	{
-		Release(Queue[0]);
-		Queue.RemoveAt(0);
-		ReleaseIn = Queue.Num() > 10 ? 0.35f : 0.8f;
+		if (Release(Queue[0]))
+		{
+			Queue.RemoveAt(0);
+			ReleaseIn = Queue.Num() > 10 ? 0.25f : 0.6f;
+		}
+		else ReleaseIn = 0.15f;
 	}
 	const float Night = World ? World->GetNight() : 0.f;
 	const float EmScale = FMath::Lerp(900.f, 1.f, FMath::Pow(Night, 0.35f));
@@ -542,16 +611,15 @@ void ASakuraDirector::UpdateFloats(float Dt)
 			if (F.bHasLantern) LanternByUser.Remove(F.User.ToLower());
 			continue;
 		}
-		const double X = RiverCx(F.Z) + F.Lane * RiverHalf(F.Z) * 0.78;
+		const double X = RiverCx(F.Z) + F.LaneX * FMath::Min(1.0, RiverHalf(F.Z) / RiverHalf(Z0));
 		const FVector P = W(X, 0.0, F.Z);
 		const float Fade = FMath::Clamp(float(F.Age) / 2.f, 0.f, 1.f) * FMath::Clamp(float(Z1 + 2.0 - F.Z) / 6.f, 0.f, 1.f);
 		if (F.bHasText && F.Text)
 		{
 			// napis leży płasko na wodzie, górą od kamery; rozciągnięty z odległością, żeby był czytelny z daleka
 			const double Dist = FVector::Dist2D(Cam, P);
-			const double SinA = FMath::Max(Cam.Z, 50.0) / FMath::Max(FVector::Dist(Cam, P), 1.0);
-			const double Stretch = FMath::Clamp(0.42 / SinA, 1.0, 7.0) * Cfg.TextScale;
-			const FMatrix M = FRotationMatrix::MakeFromXZ(FVector::UpVector, Away);
+			const double Stretch = StretchAt(P);
+			const FMatrix M = FRotationMatrix::MakeFromXZ(FVector::UpVector, Away);    // widżet: przód +X, góra tekstu +Z, prawo -Y → twarzą do nieba, górą od kamery
 			const FVector Bob(0, 0, 3.0 + FMath::Sin(Elapsed * 1.3 + F.Phase) * 1.5);
 			F.Text->SetWorldLocationAndRotation(P + Bob, M.Rotator());
 			F.Text->SetWorldScale3D(FVector(1.0, Cfg.TextScale, Stretch));
@@ -561,7 +629,7 @@ void ASakuraDirector::UpdateFloats(float Dt)
 		}
 		if (F.bHasLantern && F.Lantern)
 		{
-			const double Depth = F.bHasText ? F.Size.Y * FMath::Clamp(0.42 / (FMath::Max(Cam.Z, 50.0) / FMath::Max(FVector::Dist(Cam, P), 1.0)), 1.0, 7.0) * 0.5 + 130.0 : 0.0;
+			const double Depth = F.bHasText ? F.Size.Y * StretchAt(P) * 0.5 + 130.0 : 0.0;
 			const FVector LP = P + Away * Depth + FVector(0, 0, FMath::Sin(Elapsed * 1.4 + F.Phase) * 3.5 - 2.0);
 			F.Lantern->SetWorldLocationAndRotation(LP, FRotator(FMath::Sin(Elapsed * 0.9 + F.Phase) * 3.0, F.Phase * 36.0 + Elapsed * 4.0, FMath::Sin(Elapsed * 0.7 + F.Phase * 2.0) * 3.0));
 			const float Glow2 = (1.f + F.Flare * 2.5f) * Fade;
@@ -617,7 +685,7 @@ void ASakuraDirector::Explode(const FVector& P, int32 Pattern)
 	// światło wybuchu — oświetla wodę, brzegi i pagodę (MegaLights)
 	int32 Li = 0; float Oldest = 1e9f;
 	for (int32 I = 0; I < Bursts.Num(); ++I) if (Bursts[I].T0 < Oldest) { Oldest = Bursts[I].T0; Li = I; }
-	Bursts[Li].T0 = Elapsed; Bursts[Li].Peak = 26000.f;
+	Bursts[Li].T0 = Elapsed; Bursts[Li].Peak = 2500.f;          // ~0,6 lx na 90 m — rozbłysk tak jasny jak księżyc, nie przepala nocy
 	BurstLights[Li]->SetWorldLocation(P);
 	BurstLights[Li]->SetLightColor(FMath::Lerp(A, B, 0.3f));
 	BurstLights[Li]->SetVisibility(true);
@@ -679,6 +747,7 @@ void ASakuraDirector::UpdateSparks(float Dt)
 	if (bSparksDirty)
 	{
 		Sparks->BatchUpdateInstancesTransforms(0, SparkXf, true, true, true);
+		Sparks->MarkRenderStateDirty();                     // kolory i czasy iskier (dane instancji) też muszą trafić na GPU
 		bSparksDirty = bAny;
 	}
 	for (int32 I = 0; I < Bursts.Num(); ++I)
@@ -686,7 +755,7 @@ void ASakuraDirector::UpdateSparks(float Dt)
 		const float Age = Elapsed - Bursts[I].T0;
 		const float K = Age < 0.08f ? Age / 0.08f : FMath::Exp(-(Age - 0.08f) * 2.2f);
 		const float Night = World ? World->GetNight() : 0.f;
-		BurstLights[I]->SetIntensity(Bursts[I].Peak * K * FMath::Lerp(25.f, 1.f, Night));
+		BurstLights[I]->SetIntensity(Bursts[I].Peak * K * FMath::Lerp(200.f, 1.f, FMath::Pow(Night, 0.35f)));
 		BurstLights[I]->SetVisibility(Age < 3.f);
 	}
 }
@@ -845,6 +914,8 @@ void ASakuraDirector::Demo(float Dt)
 	FSakuraChatMessage M;
 	M.User = Names[FMath::RandRange(0, UE_ARRAY_COUNT(Names) - 1)];
 	M.Text = FMath::FRand() < 0.07f ? Cmds[FMath::RandRange(0, 3)] : Texts[FMath::RandRange(0, UE_ARRAY_COUNT(Texts) - 1)];
+	FString Test;
+	if (FParse::Value(FCommandLine::Get(), TEXT("testmsg="), Test, false)) M.Text = Test;      // test orientacji napisów
 	Chat(M);
 }
 
@@ -869,7 +940,9 @@ void ASakuraDirector::UpdateShots(float Dt)
 		return;
 	}
 	if (ShotIdx >= Shots.Num()) return;
+	const float Before = ShotTimer;
 	ShotTimer -= Dt;
+	if (Shots[ShotIdx].Time == TEXT("night") && Before >= 3.3f && ShotTimer < 3.3f) Fireworks(4);   // wybuchy trafiają w kadr zrzutu
 	if (ShotTimer < Cfg.ShotWait * 0.5f)
 	{
 		BenchSum += FApp::GetDeltaTime() * 1000.0;
@@ -877,26 +950,138 @@ void ASakuraDirector::UpdateShots(float Dt)
 		++BenchN;
 	}
 	if (ShotTimer > 0.f) return;
-	const FShot& S = Shots[ShotIdx];
-	const FString Path = FPaths::Combine(Cfg.ShotDir, FString::Printf(TEXT("%02d_%s_%s.png"), ShotIdx, *S.Time, *S.View));
-	FScreenshotRequest::RequestScreenshot(Path, false, false);
-	const FString Line = FString::Printf(TEXT("%s@%s: klatka %.2f ms, GPU %.2f ms"), *S.Time, *S.View, BenchN ? BenchSum / BenchN : 0.0, BenchN ? BenchGpu / BenchN : 0.0);
-	BenchLines.Add(Line);
-	UE_LOG(LogSakura, Display, TEXT("SakuraShot %s -> %s"), *Line, *Path);
+	if (CaptureWait < 0.f)
+	{
+		const FShot& S = Shots[ShotIdx];
+		if (!bProfiled && FParse::Param(FCommandLine::Get(), TEXT("profilegpu")))
+		{
+			bProfiled = true;
+			GEngine->Exec(GetWorld(), TEXT("ProfileGPU"));
+		}
+		const FString Path = FPaths::Combine(Cfg.ShotDir, FString::Printf(TEXT("%02d_%s_%s.png"), ShotIdx, *S.Time, *S.View));
+		FScreenshotRequest::RequestScreenshot(Path, false, false);
+		const FString Line = FString::Printf(TEXT("%s@%s: klatka %.2f ms, GPU %.2f ms"), *S.Time, *S.View, BenchN ? BenchSum / BenchN : 0.0, BenchN ? BenchGpu / BenchN : 0.0);
+		BenchLines.Add(Line);
+		const bool bMin = GEngine && GEngine->GameViewport && GEngine->GameViewport->GetWindow().IsValid() && GEngine->GameViewport->GetWindow()->IsWindowMinimized();
+		if (GEngine && GEngine->GameViewport && GEngine->GameViewport->GetWindow().IsValid())
+		{
+			const TSharedPtr<SWindow> Win = GEngine->GameViewport->GetWindow();
+			const FVector2D WS = Win->GetSizeInScreen();
+			const FIntPoint VS = GEngine->GameViewport->Viewport ? GEngine->GameViewport->Viewport->GetSizeXY() : FIntPoint::ZeroValue;
+			UE_LOG(LogSakura, Display, TEXT("SakuraWindow okno %.0fx%.0f, viewport %dx%d, zminimalizowane=%d, widoczne=%d, VRFocus=%d/%d"),
+				WS.X, WS.Y, VS.X, VS.Y, Win->IsWindowMinimized(), Win->IsVisible(), FApp::UseVRFocus(), FApp::HasVRFocus());
+		}
+		UE_LOG(LogSakura, Display, TEXT("SakuraShot %s -> %s%s"), *Line, *Path, bMin ? TEXT("  [okno zminimalizowane]") : TEXT(""));
+		CaptureWait = 1.2f;                       // zrzut zapisuje się przy rysowaniu kolejnej klatki — nic nie zmieniamy do tego czasu
+		return;
+	}
+	CaptureWait -= Dt;
+	if (CaptureWait > 0.f) return;
+	CaptureWait = -1.f;
+	if (ShotIdx == 0 && FParse::Param(FCommandLine::Get(), TEXT("minimizetest")))
+	{
+		if (GEngine && GEngine->GameViewport && GEngine->GameViewport->GetWindow().IsValid())
+		{
+			GEngine->GameViewport->GetWindow()->Minimize();
+			UE_LOG(LogSakura, Display, TEXT("SakuraShot: okno zminimalizowane (test rysowania w tle), IsWindowMinimized=%d"), GEngine->GameViewport->GetWindow()->IsWindowMinimized());
+		}
+	}
 	++ShotIdx;
 	if (ShotIdx < Shots.Num())
 	{
 		SetTimePreset(Shots[ShotIdx].Time, false, true);
 		SetView(Shots[ShotIdx].View, true);
-		ShotTimer = Cfg.ShotWait + 0.5f;
+		ShotTimer = Cfg.ShotWait;
 		BenchSum = BenchGpu = 0; BenchN = 0;
-		if (Shots[ShotIdx].Time == TEXT("night")) Fireworks(3);
 	}
 	else
 	{
 		for (const FString& L : BenchLines) UE_LOG(LogSakura, Display, TEXT("SakuraBench %s"), *L);
 		FTimerHandle H;
-		GetWorldTimerManager().SetTimer(H, []() { FGenericPlatformMisc::RequestExit(false); }, 1.5f, false);
+		GetWorldTimerManager().SetTimer(H, []() { FGenericPlatformMisc::RequestExit(false); }, 1.0f, false);
+	}
+}
+
+
+// ------------------------------------------------------------------ pomiar kosztów (-bench)
+
+void ASakuraDirector::RunCommand(const FString& Cmd, TMap<FString, FString>* Olds)
+{
+	FString Name, Val;
+	if (!Cmd.Split(TEXT(" "), &Name, &Val)) return;
+	if (Name.StartsWith(TEXT("sakura.")))
+	{
+		const bool bOn = FCString::Atoi(*Val) != 0;
+		auto Vis = [bOn](auto& Arr) { for (auto& C : Arr) C->SetVisibility(bOn); };
+		if (Name == TEXT("sakura.grass")) World->Grass->SetVisibility(bOn);
+		else if (Name == TEXT("sakura.cherries")) Vis(World->Cherries);
+		else if (Name == TEXT("sakura.forest")) Vis(World->Forest);
+		else if (Name == TEXT("sakura.rocks")) Vis(World->Rocks);
+		else if (Name == TEXT("sakura.text")) { for (FFloat& F : Floats) if (F.Text) F.Text->SetVisibility(bOn && F.bActive); }
+		if (Olds && !Olds->Contains(Name)) Olds->Add(Name, TEXT("1"));
+		return;
+	}
+	if (IConsoleVariable* C = IConsoleManager::Get().FindConsoleVariable(*Name))
+	{
+		if (Olds && !Olds->Contains(Name)) Olds->Add(Name, C->GetString());
+		C->Set(*Val, ECVF_SetByCode);
+	}
+}
+
+void ASakuraDirector::UpdateBench(float Dt)
+{
+	if (!FParse::Param(FCommandLine::Get(), TEXT("bench"))) return;
+	if (BenchIdx < 0)
+	{
+		Warm += Dt;
+		int32 Jobs = 0;
+#if WITH_EDITOR
+		if (GShaderCompilingManager) Jobs = GShaderCompilingManager->GetNumRemainingJobs();
+#endif
+		StableShaders = Jobs == 0 ? StableShaders + Dt : 0.f;
+		if (Warm < 10.f || StableShaders < 4.f) return;
+		BenchVariants = {
+			{ TEXT("bazowo"), {} },
+			{ TEXT("bez cieni chmur"), { TEXT("r.VolumetricCloud.ShadowMap 0") } },
+			{ TEXT("bez chmur"), { TEXT("r.VolumetricCloud 0") } },
+			{ TEXT("bez statystyk VSM"), { TEXT("r.Shadow.Virtual.Stats 0") } },
+			{ TEXT("bez VSM"), { TEXT("r.Shadow.Virtual.Enable 0") } },
+			{ TEXT("Lumen programowy"), { TEXT("r.Lumen.HardwareRayTracing 0") } },
+			{ TEXT("bez Lumen GI"), { TEXT("r.Lumen.DiffuseIndirect.Allow 0") } },
+			{ TEXT("bez mgły wolumetrycznej"), { TEXT("r.VolumetricFog 0") } },
+			{ TEXT("bez MegaLights"), { TEXT("r.MegaLights.Allowed 0") } },
+			{ TEXT("bez odbić wody"), { TEXT("r.Water.SingleLayer.Reflection 0") } },
+			{ TEXT("Nanite bez WPO/raster prog."), { TEXT("r.Nanite.ProgrammableRaster 0") } },
+			{ TEXT("bez trawy"), { TEXT("sakura.grass 0") } },
+			{ TEXT("bez wiśni"), { TEXT("sakura.cherries 0") } },
+			{ TEXT("bez lasu"), { TEXT("sakura.forest 0") } },
+			{ TEXT("bez kamieni"), { TEXT("sakura.rocks 0") } },
+			{ TEXT("rozdzielczość 50%"), { TEXT("r.ScreenPercentage 50") } },
+		};
+		BenchIdx = 0; BenchTimer = 0.f; BenchSum = BenchGpu = 0; BenchN = 0;
+		World->SetFastExposure(true);
+		return;
+	}
+	if (BenchIdx >= BenchVariants.Num()) return;
+	if (BenchTimer == 0.f) for (const FString& C : BenchVariants[BenchIdx].Cmds) RunCommand(C, &BenchOlds);
+	BenchTimer += Dt;
+	if (BenchTimer > 2.5f)
+	{
+		BenchSum += FApp::GetDeltaTime() * 1000.0;
+		BenchGpu += FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles());
+		++BenchN;
+	}
+	if (BenchTimer < 5.5f) return;
+	const double Gpu = BenchN ? BenchGpu / BenchN : 0.0;
+	if (BenchIdx == 0) BenchBase = Gpu;
+	UE_LOG(LogSakura, Display, TEXT("SakuraBench %-28s GPU %7.2f ms  (%+7.2f)  klatka %7.2f ms"), *BenchVariants[BenchIdx].Name, Gpu, Gpu - BenchBase, BenchN ? BenchSum / BenchN : 0.0);
+	for (const TPair<FString, FString>& O : BenchOlds) RunCommand(O.Key + TEXT(" ") + O.Value, nullptr);
+	BenchOlds.Reset();
+	++BenchIdx; BenchTimer = 0.f; BenchSum = BenchGpu = 0; BenchN = 0;
+	if (BenchIdx >= BenchVariants.Num())
+	{
+		FTimerHandle H;
+		GetWorldTimerManager().SetTimer(H, []() { FGenericPlatformMisc::RequestExit(false); }, 1.0f, false);
 	}
 }
 
@@ -916,6 +1101,7 @@ void ASakuraDirector::Tick(float DeltaSeconds)
 	UpdateFloats(DeltaSeconds);
 	UpdateSparks(DeltaSeconds);
 	UpdateShots(DeltaSeconds);
+	UpdateBench(DeltaSeconds);
 
 	// NDI: zaczyna, gdy okno gry już istnieje
 	if (Cfg.bNDI && !bNDIStarted && Elapsed > 1.f)

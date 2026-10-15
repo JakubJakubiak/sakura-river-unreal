@@ -27,6 +27,7 @@ struct FSakuraConfig
 	int32 FpsLimit = 60;                     // limit klatek (0 = bez limitu)
 	int32 ResX = 1920, ResY = 1080;          // rozmiar okna
 	bool bFullscreen = false;
+	bool bRenderMinimized = true;            // rysuj dalej po zminimalizowaniu okna (OBS: przechwytywanie gry na Windows, NDI)
 	bool bNDI = false;                       // wyjście NDI (OBS: wtyczka DistroAV) — działa także przy zminimalizowanym oknie
 	FString NDIName = TEXT("Sakura River HD");
 	FString Shots;                           // automatyczne zrzuty: "day@river,night@bridge" (do testów)

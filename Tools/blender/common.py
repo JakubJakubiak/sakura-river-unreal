@@ -76,12 +76,14 @@ def ground_h(x, z, hd=True):
 
 
 def mountains(x, z):
-    """Dodatek gór w dalekim terenie (metry) — rośnie z odległością od rzeki."""
+    """Dodatek gór w dalekim terenie (metry): pasma rosną dopiero 2–6 km od środka sceny, więc nad nimi zostaje niebo i Fuji."""
+    dc = np.sqrt(x * x + (z + 60.0) ** 2)
     d = river_dist(x, z)
-    r = ridged(x / 1100.0 + 3.1, z / 1100.0 - 7.7, 6)
-    big = smooth(150, 2600, d) * (180 + 520 * r)
-    hills = smooth(120, 900, d) * fbm(x / 260.0, z / 260.0, 4) * 60
-    return big + hills
+    r = ridged(x / 1400.0 + 3.1, z / 1400.0 - 7.7, 6)
+    valley = smooth(40, 400, d)
+    big = smooth(1800, 6500, dc) * (120 + 520 * r)
+    hills = smooth(250, 1600, dc) * fbm(x / 300.0, z / 300.0, 4) * 40
+    return (big + hills) * valley
 
 
 # ---------- budowa siatek z tablic ----------

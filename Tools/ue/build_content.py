@@ -9,11 +9,11 @@ ROOT = "/Game/Sakura"
 PROJECT = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
 FBX_DIR = os.environ.get("SAKURA_OUT") or os.path.join(PROJECT, "Tools", "out")
 ONLY = set(filter(None, os.environ.get("SAKURA_ONLY", "").split(",")))     # np. SAKURA_ONLY=materials,meshes,map
+MESH_FILTER = set(filter(None, os.environ.get("SAKURA_MESHES", "").split(",")))   # np. SAKURA_MESHES=SM_TerrainFar
 
 AT = unreal.AssetToolsHelpers.get_asset_tools()
 MEL = unreal.MaterialEditingLibrary
 EAL = unreal.EditorAssetLibrary
-SMES = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
 MSM = unreal.MaterialShadingModel
 CMOT = unreal.CustomMaterialOutputType
 ERRORS = []
@@ -77,24 +77,22 @@ class Graph:
     """Pomocnik do składania grafu materiału z węzłów."""
 
     def __init__(self, name, mpc, shading=MSM.MSM_DEFAULT_LIT, blend=unreal.BlendMode.BLEND_OPAQUE, two_sided=False,
-                 tsn=True, nanite=True, ism=True, is_sky=False, wpo_max=0.0):
+                 tsn=True, nanite=True, ism=True, is_sky=False, wpo_max=0.0, voxels=False):
         path = f"{ROOT}/Materials/{name}"
         if EAL.does_asset_exist(path):
             self.m = EAL.load_asset(path)
             MEL.delete_all_material_expressions(self.m)
+            for e in list(MEL.get_material_expressions(self.m) or []):      # także węzły wyjść (np. Single Layer Water)
+                MEL.delete_material_expression(self.m, e)
         else:
             self.m = AT.create_asset(name, f"{ROOT}/Materials", unreal.Material, unreal.MaterialFactoryNew())
         self.name = name
         self.mpc = mpc
-        m = self.m
-        m.set_editor_property("shading_model", shading)
-        m.set_editor_property("blend_mode", blend)
-        m.set_editor_property("two_sided", two_sided)
-        m.set_editor_property("tangent_space_normal", tsn)
-        m.set_editor_property("is_sky", is_sky)
-        m.set_editor_property("used_with_nanite", nanite)
-        m.set_editor_property("used_with_instanced_static_meshes", ism)
-        m.set_editor_property("max_world_position_offset_displacement", wpo_max)
+        never = unreal.PropertyAccessChangeNotifyMode.NEVER
+        for k, v in [("shading_model", shading), ("blend_mode", blend), ("two_sided", two_sided), ("tangent_space_normal", tsn),
+                     ("is_sky", is_sky), ("used_with_nanite", nanite), ("used_with_instanced_static_meshes", ism),
+                     ("max_world_position_offset_displacement", wpo_max), ("used_with_voxels", voxels)]:
+            self.m.set_editor_property(k, v, never)
         self.x, self.y = -1400, -300
 
     def node(self, cls, **props):
@@ -197,7 +195,7 @@ def build_materials(mpc):
     mats["water"] = g.finish()
 
     # kora
-    g = Graph("M_Bark", mpc, wpo_max=120.0)
+    g = Graph("M_Bark", mpc, wpo_max=120.0, voxels=True)
     vc = g.vc()
     c = g.custom("float r; float3 n; float3 c = SkBark(UV, float4(VC, VA), r, n); Rough = r; Nrm = n; return c;",
                  [("UV", g.uv(), ""), ("VC", vc, ""), ("VA", vc, "A")], outputs=[("Rough", F1), ("Nrm", F3)], desc="Kora")
@@ -206,7 +204,7 @@ def build_materials(mpc):
     mats["bark"] = g.finish()
 
     # kwiaty wiśni: dwustronne liście (światło przechodzi przez płatki)
-    g = Graph("M_Blossom", mpc, shading=MSM.MSM_TWO_SIDED_FOLIAGE, two_sided=True, wpo_max=140.0)
+    g = Graph("M_Blossom", mpc, shading=MSM.MSM_TWO_SIDED_FOLIAGE, two_sided=True, wpo_max=140.0, voxels=True)
     vc = g.vc()
     c = g.custom("float ao = lerp(0.45, 1.0, VA); float vein = 1.0 - 0.06 * sin(UV.y * 31.4 + UV.x * 12.0);"
                  "Sub = saturate(VC * float3(1.05, 0.9, 0.95)) * 0.85 * ao; Rough = 0.55; return VC * ao * vein;",
@@ -216,7 +214,7 @@ def build_materials(mpc):
     mats["blossom"] = g.finish()
 
     # liście (las, młode listki)
-    g = Graph("M_Leaf", mpc, shading=MSM.MSM_TWO_SIDED_FOLIAGE, two_sided=True, wpo_max=120.0)
+    g = Graph("M_Leaf", mpc, shading=MSM.MSM_TWO_SIDED_FOLIAGE, two_sided=True, wpo_max=120.0, voxels=True)
     vc = g.vc()
     c = g.custom("float n = SkFbm(WP.xy * 0.004, 3); float3 c = VC * lerp(0.5, 1.0, VA) * (0.8 + 0.4 * n);"
                  "Sub = c * float3(1.1, 1.3, 0.6); Rough = 0.7; return c;",
@@ -313,12 +311,12 @@ def build_materials(mpc):
     g.out(w, MP.MP_WORLD_POSITION_OFFSET)
     mats["rain"] = g.finish()
 
-    # świetliki
-    g = Graph("M_Firefly", mpc, shading=MSM.MSM_UNLIT, nanite=False)
-    c = g.custom("float b = pow(0.5 + 0.5 * sin(T * 2.1 + Rnd * 40.0), 6.0); return float3(0.75, 1.0, 0.35) * b * 18.0 * smoothstep(0.55, 0.85, Night);",
+    # świetliki: addytywne (zgaszone są niewidoczne), rozmiar z danych (instancja ma skalę 1)
+    g = Graph("M_Firefly", mpc, shading=MSM.MSM_UNLIT, blend=unreal.BlendMode.BLEND_ADDITIVE, nanite=False)
+    c = g.custom("float b = pow(0.5 + 0.5 * sin(T * 2.1 + Rnd * 40.0), 6.0); return float3(0.75, 1.0, 0.35) * b * 6.0 * smoothstep(0.55, 0.85, Night);",
                  [("T", g.time(), ""), ("Rnd", g.rnd(), ""), ("Night", g.coll("Night"), "")], desc="Świetlik")
     g.out(c, MP.MP_EMISSIVE_COLOR)
-    w = g.custom("return SkFireflyWPO(WP, LP, float3(P0, P1, P2), T, Rnd, Night);",
+    w = g.custom("float b = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(T * 2.1 + Rnd * 40.0), 6.0); return SkFireflyWPO(WP, LP * 0.07 * b, float3(P0, P1, P2), T, Rnd, Night);",
                  [("WP", g.wp(), ""), ("LP", g.lp(), ""), ("P0", g.pid(0), ""), ("P1", g.pid(1), ""), ("P2", g.pid(2), ""),
                   ("T", g.time(), ""), ("Rnd", g.rnd(), ""), ("Night", g.coll("Night"), "")], desc="Lot świetlika")
     g.out(w, MP.MP_WORLD_POSITION_OFFSET)
@@ -350,7 +348,7 @@ MESHES = {
     # nazwa: (nanite, tryb kształtu Nanite, dwustronne pole odległości, skala rozdzielczości DF)
     "SM_TerrainNear": (True, "NONE", False, 0.25), "SM_TerrainFar": (True, "NONE", False, 0.05), "SM_Fuji": (True, "NONE", False, 0.05),
     "SM_Sakura_A": (True, "VOXELIZE", True, 1.0), "SM_Sakura_B": (True, "VOXELIZE", True, 1.0), "SM_Sakura_C": (True, "VOXELIZE", True, 1.0),
-    "SM_Tree_Broad": (True, "PRESERVE_AREA", True, 1.0), "SM_Tree_Sugi": (True, "PRESERVE_AREA", True, 1.0),
+    "SM_Tree_Broad": (True, "VOXELIZE", True, 1.0), "SM_Tree_Sugi": (True, "VOXELIZE", True, 1.0),
     "SM_GrassPatch": (True, "PRESERVE_AREA", True, 0.5),
     "SM_Pagoda": (True, "NONE", False, 1.0), "SM_Bridge": (True, "NONE", False, 1.0), "SM_StoneLantern": (True, "NONE", False, 1.0),
     "SM_Torii": (True, "NONE", False, 1.0), "SM_FloatLantern": (True, "NONE", False, 1.0),
@@ -360,10 +358,12 @@ MESHES = {
 
 
 def import_meshes(mats):
+    SMES = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem) or unreal.StaticMeshEditorSubsystem()
     ensure_dir(f"{ROOT}/Meshes")
     before = set(EAL.list_assets(f"{ROOT}/Meshes", recursive=True, include_folder=False))
     tasks = []
-    for name in MESHES:
+    names = [n for n in MESHES if not MESH_FILTER or n in MESH_FILTER]
+    for name in names:
         f = os.path.join(FBX_DIR, name + ".fbx")
         if not os.path.exists(f):
             err(f"brak pliku {f}")
@@ -377,7 +377,8 @@ def import_meshes(mats):
         t.set_editor_property("save", False)
         tasks.append(t)
     AT.import_asset_tasks(tasks)
-    for name, (nanite, shape, two_sided_df, dfres) in MESHES.items():
+    for name in names:
+        nanite, shape, two_sided_df, dfres = MESHES[name]
         path = f"{ROOT}/Meshes/{name}"
         mesh = EAL.load_asset(path)
         if not isinstance(mesh, unreal.StaticMesh):
