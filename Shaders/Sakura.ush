@@ -1,0 +1,329 @@
+// Sakura River HD — wspólny kod materiałów (dołączany przez węzły Custom: #include "/Project/Sakura.ush").
+// Wszystko proceduralne: bez tekstur, więc jakość nie zależy od rozdzielczości obrazków, a paczka jest mała.
+// Jednostki: pozycje świata w cm (UE), w funkcjach przeliczane na metry. Plan rzeki jak w wersji web:
+//   web x = UE Y / 100, web z = -UE X / 100.
+#pragma once
+
+// ---------------------------------------------------------------- szum
+float SkHash21(float2 p) { p = frac(p * float2(123.34, 456.21)); p += dot(p, p + 45.32); return frac(p.x * p.y); }
+float SkHash31(float3 p) { p = frac(p * 0.1031); p += dot(p, p.zyx + 31.32); return frac((p.x + p.y) * p.z); }
+float2 SkHash22(float2 p) { float3 a = frac(p.xyx * float3(123.34, 234.34, 345.65)); a += dot(a, a + 34.45); return frac(float2(a.x * a.y, a.y * a.z)); }
+float3 SkHash33(float3 p) { p = frac(p * float3(0.1031, 0.1030, 0.0973)); p += dot(p, p.yxz + 33.33); return frac((p.xxy + p.yxx) * p.zyx); }
+
+// szum wartości z pochodną analityczną: (wartość, d/dx, d/dy)
+float3 SkNoiseD(float2 p)
+{
+	float2 i = floor(p), f = frac(p);
+	float2 u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);
+	float a = SkHash21(i), b = SkHash21(i + float2(1, 0)), c = SkHash21(i + float2(0, 1)), d = SkHash21(i + float2(1, 1));
+	float k1 = b - a, k2 = c - a, k3 = a - b - c + d;
+	return float3(a + k1 * u.x + k2 * u.y + k3 * u.x * u.y, du * float2(k1 + k3 * u.y, k2 + k3 * u.x));
+}
+float SkNoise(float2 p) { return SkNoiseD(p).x; }
+float SkNoise3(float3 p)
+{
+	float3 i = floor(p), f = frac(p); float3 u = f * f * (3.0 - 2.0 * f);
+	float n000 = SkHash31(i), n100 = SkHash31(i + float3(1, 0, 0)), n010 = SkHash31(i + float3(0, 1, 0)), n110 = SkHash31(i + float3(1, 1, 0));
+	float n001 = SkHash31(i + float3(0, 0, 1)), n101 = SkHash31(i + float3(1, 0, 1)), n011 = SkHash31(i + float3(0, 1, 1)), n111 = SkHash31(i + float3(1, 1, 1));
+	return lerp(lerp(lerp(n000, n100, u.x), lerp(n010, n110, u.x), u.y), lerp(lerp(n001, n101, u.x), lerp(n011, n111, u.x), u.y), u.z);
+}
+// fbm z pochodną (oktawy przesunięte, bez obrotu — pochodna to suma)
+float3 SkFbmD(float2 p, int oct)
+{
+	float3 s = 0; float a = 0.5, f = 1.0, n = 0;
+	[unroll(6)] for (int i = 0; i < oct; i++)
+	{
+		float3 v = SkNoiseD(p * f + float2(17.1, 31.7) * i);
+		s += a * float3(v.x, v.yz * f); n += a; a *= 0.5; f *= 2.03;
+	}
+	return s / n;
+}
+float SkFbm(float2 p, int oct) { return SkFbmD(p, oct).x; }
+float3 SkSrgb(float3 c) { return pow(c, 2.2); }
+
+float3 SkRotate(float3 v, float3 axis, float ang)
+{
+	float s = sin(ang), c = cos(ang);
+	return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+}
+
+// ---------------------------------------------------------------- rzeka (te same wzory co w index.html)
+float SkRiverCx(float z) { return z < -60.0 ? (z + 60.0) * (z + 60.0) * 0.012 : (z > 36.0 ? -(z - 36.0) * (z - 36.0) * 0.03 : 0.0); }
+float SkRiverDCx(float z) { return z < -60.0 ? 2.0 * (z + 60.0) * 0.012 : (z > 36.0 ? -2.0 * (z - 36.0) * 0.03 : 0.0); }
+float SkRiverHalf(float z) { return 12.0 + 2.2 * sin(z * 0.045) + 1.2 * sin(z * 0.11 + 1.0); }
+float SkRiverDist(float3 wp) { float x = wp.y / 100.0, z = -wp.x / 100.0; return abs(x - SkRiverCx(z)) - SkRiverHalf(z); }
+// kierunek nurtu w płaszczyźnie UE XY (w dół rzeki = w stronę kamery)
+float2 SkFlowDir(float3 wp) { float z = -wp.x / 100.0; return normalize(float2(-1.0, -SkRiverDCx(z))); }
+
+// ---------------------------------------------------------------- teren
+// VC: R piasek, G dno, B skała, A odmiana łąki. Zwraca kolor (liniowy); Rough i N (świat) przez out.
+float3 SkTerrain(float3 wp, float4 vc, float3 vn, float3 cam, float wet, float night, out float rough, out float3 nOut)
+{
+	float2 p = wp.xy / 100.0;
+	float dist = length(wp - cam) / 100.0;
+	float lod = saturate((dist - 40.0) / 160.0);                       // dalej mniej drobnych detali (mniej migotania)
+
+	// łąka: kilka zieleni + plamy
+	float3 g1 = SkSrgb(float3(0.42, 0.60, 0.25)), g2 = SkSrgb(float3(0.60, 0.69, 0.31)), g3 = SkSrgb(float3(0.25, 0.42, 0.18)), g4 = SkSrgb(float3(0.55, 0.52, 0.30));
+	float3 big = SkFbmD(p * 0.045, 4);
+	float3 mid = SkFbmD(p * 0.6 + 7.0, 3);
+	float3 fine = SkFbmD(p * 6.0, 2);
+	float3 grass = lerp(g1, g2, smoothstep(0.35, 0.7, big.x));
+	grass = lerp(grass, g3, smoothstep(0.55, 0.85, vc.a) * 0.8);
+	grass = lerp(grass, g4, smoothstep(0.62, 0.8, mid.x) * 0.35);
+	grass *= 0.82 + 0.3 * lerp(fine.x, 0.5, lod);
+	// opadłe płatki i drobne kwiatki na łące
+	float2 cell = floor(p * 3.0); float2 cf = frac(p * 3.0) - SkHash22(cell);
+	float pet = step(0.86, SkHash21(cell + 3.1)) * (1.0 - smoothstep(0.04, 0.09, length(cf))) * (1.0 - lod);
+	grass = lerp(grass, SkSrgb(float3(1.0, 0.82, 0.88)), pet * 0.9);
+
+	// piasek / żwir przy wodzie
+	float3 sand = SkSrgb(float3(0.80, 0.72, 0.56)) * (0.85 + 0.25 * SkNoise(p * 9.0));
+	// dno: kamyki
+	float2 pc = floor(p * 5.0); float2 pf = frac(p * 5.0) - 0.5 - (SkHash22(pc) - 0.5) * 0.4;
+	float peb = 1.0 - smoothstep(0.25, 0.45, length(pf));
+	float3 bed = lerp(SkSrgb(float3(0.62, 0.58, 0.46)), SkSrgb(float3(0.45, 0.47, 0.40)) * (0.7 + 0.6 * SkHash21(pc)), peb);
+	bed = lerp(bed, SkSrgb(float3(0.35, 0.42, 0.25)), smoothstep(0.55, 0.75, mid.x) * 0.5);   // glony
+	// skała
+	float strata = SkFbm(float2(p.x * 0.3, wp.z / 100.0 * 2.0), 3);
+	float3 rock = SkSrgb(float3(0.52, 0.51, 0.48)) * (0.7 + 0.45 * strata);
+
+	float3 col = grass;
+	col = lerp(col, sand, saturate(vc.r));
+	col = lerp(col, bed, saturate(vc.g));
+	col = lerp(col, rock, saturate(vc.b) * 0.9);
+	// śnieg na wysokich górach
+	float snow = smoothstep(820.0, 1000.0, wp.z / 100.0 + (big.x - 0.5) * 220.0) * smoothstep(0.35, 0.75, vn.z);
+	col = lerp(col, float3(0.92, 0.94, 0.97), snow);
+
+	// mokro przy linii wody i w deszczu
+	float shore = (1.0 - smoothstep(0.0, 0.35, wp.z / 100.0)) * (1.0 - vc.g);
+	float w = saturate(max(shore, wet * (1.0 - vc.g)));
+	col *= lerp(1.0, 0.62, w);
+	rough = lerp(lerp(0.88, 0.75, vc.b), 0.32, w);
+	rough = lerp(rough, 0.6, vc.g);
+
+	// normalna: drobne nierówności zależnie od rodzaju podłoża
+	float2 grad = mid.yz * 0.6 * 0.03 + fine.yz * 6.0 * 0.004 * (1.0 - lod);
+	grad += (pf * peb) * 0.25 * vc.g;
+	grad *= 1.0 - snow * 0.7;
+	nOut = normalize(vn - float3(grad, 0) * (1.0 - vn.z * 0.0));
+	return col;
+}
+
+// ---------------------------------------------------------------- Fuji
+float3 SkFuji(float3 wp, float4 vc, float3 vn, float night, out float rough)
+{
+	float h = vc.a;                                     // 0 szczyt .. 1 podstawa (promień)
+	float n = SkFbm(wp.xy / 100.0 * 0.004, 4);
+	float line = 0.30 + (n - 0.5) * 0.18 + vc.b * 0.22;  // w żlebach śnieg schodzi niżej
+	float snow = 1.0 - smoothstep(line - 0.03, line + 0.03, h);
+	float3 slope = lerp(SkSrgb(float3(0.32, 0.36, 0.42)), SkSrgb(float3(0.36, 0.42, 0.30)), smoothstep(0.55, 0.9, h));
+	slope *= 0.8 + 0.4 * SkFbm(wp.xy / 100.0 * 0.02, 3);
+	rough = lerp(0.9, 0.55, snow);
+	return lerp(slope, float3(0.93, 0.95, 0.98), snow);
+}
+
+// ---------------------------------------------------------------- woda (Single Layer Water)
+float2 SkRainRipples(float2 p, float t)
+{
+	float2 g = 0;
+	[unroll] for (int k = 0; k < 2; k++)
+	{
+		float2 q = p + k * float2(0.37, 0.61);
+		float2 c = floor(q); float2 f = frac(q);
+		float2 ctr = 0.2 + 0.6 * SkHash22(c + k * 7.0);
+		float ph = frac(t * 0.9 + SkHash21(c + 13.0 + k));
+		float2 d = f - ctr; float r = length(d) + 1e-4;
+		float ring = sin((r - ph * 0.45) * 60.0) * (1.0 - ph) * saturate(1.0 - abs(r - ph * 0.45) * 12.0);
+		g += d / r * ring * 0.35;
+	}
+	return g;
+}
+
+// Zwraca normalną świata; Foam = piana przy brzegach (do BaseColor/Opacity)
+float3 SkWater(float3 wp, float t, float rain, float wind, out float foam)
+{
+	float2 p = wp.xy / 100.0;
+	float2 fl = SkFlowDir(wp);
+	float speed = 0.8;
+	float2 q = p - fl * t * speed;
+	float3 n1 = SkFbmD(float2(dot(q, fl), dot(q, float2(-fl.y, fl.x)) * 1.6) * 0.55 + 3.1, 4);   // długie fale wzdłuż nurtu
+	float3 n2 = SkFbmD(q * 1.9 + float2(t * 0.11, -t * 0.07), 3);
+	float3 n3 = SkFbmD(p * 5.0 - fl * t * 1.4, 2);                                              // drobne zmarszczki
+	float amp = 1.0 + wind * 0.8;
+	float2 grad = n1.yz * 0.55 * 0.10 * amp + n2.yz * 1.9 * 0.035 * amp + n3.yz * 5.0 * 0.010 * amp;
+	grad += SkRainRipples(p * 2.2, t) * rain * 0.9;
+	float d = SkRiverDist(wp);                           // < 0 w wodzie
+	float edge = smoothstep(-1.6, 0.1, d);
+	float streaks = smoothstep(0.55, 0.85, SkFbm(float2(dot(q, fl) * 0.7, dot(p, float2(-fl.y, fl.x)) * 3.0), 3));
+	foam = saturate(edge * (0.35 + 0.65 * streaks)) * 0.55;
+	grad *= 1.0 - edge * 0.5;
+	return normalize(float3(-grad, 1.0));
+}
+
+// ---------------------------------------------------------------- kora (UV: u dookoła, v wzdłuż w obwodach)
+float3 SkBark(float2 uv, float4 vc, out float rough, out float3 nTS)
+{
+	float2 q = float2(uv.x * 6.0, uv.y * 6.0);
+	float3 n = SkFbmD(float2(q.x * 1.5, q.y * 0.6), 4);
+	// przetchlinki wiśni: poziome kreski dookoła pnia
+	float2 cell = float2(floor(q.y * 3.0), floor(q.x * 0.8));
+	float lv = frac(q.y * 3.0) - 0.5; float lu = frac(q.x * 0.8) - 0.5;
+	float lent = (1.0 - smoothstep(0.03, 0.08, abs(lv))) * (1.0 - smoothstep(0.2, 0.42, abs(lu))) * step(0.45, SkHash21(cell));
+	float3 col = vc.rgb * (0.65 + 0.5 * n.x);
+	col = lerp(col, col * 1.9 + 0.03, lent * 0.6);
+	rough = 0.85;
+	nTS = normalize(float3(-n.yz * 0.35 + float2(0, lv * lent * 0.8), 1.0));
+	return col;
+}
+
+// ---------------------------------------------------------------- powierzchnie budowli (rzut trójpłaszczyznowy w świecie)
+// Pattern: 0 gładko, 1 drewno, 2 kamień, 3 dachówki, 4 tynk, 5 papier, 6 metal, 7 lakier
+float3 SkSurface(float3 wp, float3 vn, float3 col, float pattern, float scale, float rough0, out float rough, out float3 nOut)
+{
+	float3 an = abs(vn);
+	float2 uv; float3 ta, tb;
+	if (an.z > 0.7)            { uv = wp.xy; ta = float3(1, 0, 0); tb = float3(0, 1, 0); }
+	else if (an.x > an.y)      { uv = wp.yz; ta = float3(0, 1, 0); tb = float3(0, 0, 1); }
+	else                       { uv = wp.xz; ta = float3(1, 0, 0); tb = float3(0, 0, 1); }
+	uv = uv / 100.0 * scale;
+	float3 c = col; float2 g = 0; rough = rough0;
+	int pt = (int)round(pattern);
+	if (pt == 1)            // drewno: słoje + deski
+	{
+		float3 gr = SkFbmD(float2(uv.x * 0.7, uv.y * 22.0), 3);
+		float plank = frac(uv.y * 4.0); float seam = smoothstep(0.0, 0.04, plank) * smoothstep(1.0, 0.96, plank);
+		c *= (0.72 + 0.45 * gr.x) * lerp(0.55, 1.0, seam);
+		g = gr.yz * float2(0.7, 22.0) * 0.004; rough = rough0 + (gr.x - 0.5) * 0.15;
+	}
+	else if (pt == 2)       // kamień
+	{
+		float3 a = SkFbmD(uv * 2.0, 4); float cr = 1.0 - smoothstep(0.0, 0.025, abs(SkNoise(uv * 1.3 + 9.0) - 0.5));
+		c *= (0.72 + 0.5 * a.x) * (1.0 - cr * 0.45);
+		g = a.yz * 2.0 * 0.03; rough = 0.82;
+	}
+	else if (pt == 3)       // dachówki: rzędy po wysokości, rowki w poziomie
+	{
+		float u = dot(wp, ta) / 100.0 * scale, z = wp.z / 100.0 * scale;
+		float row = frac(z * 5.5); float rib = sin(u * 3.14159 * 9.0);
+		c *= (0.78 + 0.22 * rib) * lerp(0.6, 1.0, smoothstep(0.0, 0.15, row)) * (0.9 + 0.2 * SkNoise(float2(u, z) * 3.0));
+		g = float2(cos(u * 28.27) * 0.22, 0);
+		rough = 0.55;
+	}
+	else if (pt == 4)       // tynk
+	{
+		float3 a = SkFbmD(uv * 3.0, 3);
+		c *= 0.9 + 0.16 * a.x; g = a.yz * 3.0 * 0.01; rough = 0.9;
+	}
+	else if (pt == 5)       // papier
+	{
+		float f = SkFbm(uv * float2(40.0, 9.0), 2);
+		c *= 0.92 + 0.12 * f; rough = 0.95;
+	}
+	else if (pt == 6)       // metal
+	{
+		float f = SkFbm(uv * float2(2.0, 30.0), 3);
+		c *= 0.85 + 0.25 * f; rough = rough0 + (f - 0.5) * 0.2;
+	}
+	else if (pt == 7)       // lakier: gładki, z lekkim przetarciem
+	{
+		float f = SkFbm(uv * 1.5, 3);
+		c *= 0.9 + 0.18 * f; rough = rough0 + smoothstep(0.6, 0.8, f) * 0.25;
+	}
+	nOut = normalize(vn - ta * g.x - tb * g.y);
+	return c;
+}
+
+// ---------------------------------------------------------------- wiatr (WPO dla drzew i trawy)
+// local — pozycja wierzchołka w układzie instancji (cm), flex — giętkość (0 pień .. 1 kwiat/źdźbło)
+float3 SkWind(float3 wp, float3 local, float t, float wind, float rnd, float flex, float stiff)
+{
+	float h = max(0.0, local.z / 100.0);
+	float r = length(local.xy) / 100.0;
+	float bend = (h * h * 0.0035 + r * 0.012) * stiff;
+	float ph = rnd * 6.2831 + dot(wp.xy, float2(0.00031, 0.00023));
+	float gust = 0.6 + 0.4 * sin(t * 0.21 + wp.x * 0.0002) * sin(t * 0.13 + wp.y * 0.00017);
+	float s = (0.35 + wind) * gust;
+	float main = sin(t * 0.85 + ph) * 0.6 + sin(t * 1.63 + ph * 1.7) * 0.25;
+	float2 dir = normalize(float2(-0.35, 1.0));
+	float flutter = sin(t * 5.3 + dot(wp, float3(0.031, 0.047, 0.023))) * flex;
+	float3 o;
+	o.xy = dir * (main * bend * s * 100.0) + float2(flutter, flutter * 0.7) * (0.6 + 1.6 * wind) * flex;
+	o.z = -abs(main) * bend * s * 25.0 + flutter * 0.4 * flex;
+	return o;
+}
+
+// ---------------------------------------------------------------- opadające płatki (ISM, każdy płatek = instancja)
+// pivot0 — pozycja startowa instancji (dane instancji), local — pozycja wierzchołka w płatku
+float3 SkPetalWPO(float3 wp, float3 local, float3 pivot0, float3 cam, float t, float rnd, float wind, float boost, float rain)
+{
+	const float B = 3600.0, H = 1800.0;
+	float r1 = frac(rnd * 7.13), r2 = frac(rnd * 3.71), r3 = frac(rnd * 13.7), r4 = frac(rnd * 5.31);
+	float fall = lerp(40.0, 90.0, r1) * (1.0 + rain * 1.5);
+	float3 drift = float3(-30.0 - 70.0 * wind, 35.0 + 140.0 * wind, 0.0) * lerp(0.6, 1.4, r2);
+	float3 p = pivot0 + drift * t;
+	p.z -= fall * t;
+	p.xy += float2(sin(t * 1.3 + rnd * 40.0), cos(t * 1.1 + rnd * 23.0)) * 35.0;
+	float3 rel = p - cam;
+	rel.xy = (frac(rel.xy / B + 0.5) - 0.5) * B;
+	rel.z = frac((rel.z + 400.0) / H) * H - 400.0;
+	float3 np = cam + rel;
+	float dens = saturate(0.22 + boost * 0.78);
+	float vis = step(r3, dens) * step(6.0, np.z) * saturate(length(rel.xy) / 60.0);
+	float a = t * lerp(1.5, 4.5, r4) + rnd * 40.0;
+	float3 axis = normalize(float3(sin(rnd * 91.0), cos(rnd * 57.0), 0.5));
+	float3 rl = SkRotate(local, axis, a) * vis * lerp(0.9, 1.5, r2);
+	return np + rl - wp;
+}
+
+float3 SkRainWPO(float3 wp, float3 local, float3 pivot0, float3 cam, float t, float rnd, float rain, float wind)
+{
+	const float B = 2600.0, H = 1600.0;
+	float3 p = pivot0 + float3(-60.0 * wind, 90.0 * wind, -950.0 * lerp(0.85, 1.15, frac(rnd * 3.3))) * t;
+	float3 rel = p - cam;
+	rel.xy = (frac(rel.xy / B + 0.5) - 0.5) * B;
+	rel.z = frac((rel.z + 300.0) / H) * H - 300.0;
+	float3 np = cam + rel;
+	float vis = step(frac(rnd * 17.3), rain) * step(0.0, np.z) * saturate(length(rel.xy) / 80.0);
+	return np + local * vis - wp;
+}
+
+// świetliki: krążą wokół punktu startowego, widoczne nocą
+float3 SkFireflyWPO(float3 wp, float3 local, float3 pivot0, float t, float rnd, float night)
+{
+	float3 o = float3(sin(t * 0.37 + rnd * 20.0) * 90.0 + sin(t * 0.91 + rnd * 5.0) * 30.0,
+	                  cos(t * 0.31 + rnd * 33.0) * 90.0 + cos(t * 0.77 + rnd * 9.0) * 30.0,
+	                  sin(t * 0.53 + rnd * 7.0) * 45.0);
+	float vis = smoothstep(0.55, 0.85, night);
+	return pivot0 + o + local * vis - wp;
+}
+
+// ---------------------------------------------------------------- niebo nocą: gwiazdy, Droga Mleczna, księżyc
+float3 SkNightSky(float3 dir, float3 moonDir, float night, float t)
+{
+	float3 col = 0;
+	if (night > 0.001)
+	{
+		float up = saturate(dir.z * 4.0);
+		float3 g = dir * 260.0; float3 c = floor(g); float3 f = frac(g) - 0.5;
+		float h = SkHash31(c);
+		float3 off = (SkHash33(c) - 0.5) * 0.6;
+		float star = step(0.972, h) * pow(saturate(1.0 - length(f - off) * 3.2), 10.0);
+		star *= 0.6 + 0.4 * sin(t * (2.0 + h * 3.0) + h * 60.0);
+		float3 sc = lerp(float3(0.75, 0.85, 1.0), float3(1.0, 0.9, 0.75), frac(h * 37.0));
+		float band = exp(-pow(dot(dir, normalize(float3(0.35, -0.6, 0.72))) * 3.2, 2.0)) * SkNoise3(dir * 6.0) * 0.6;
+		col += (star * sc * 6.0 + band * float3(0.18, 0.2, 0.3)) * up;
+		// księżyc: tarcza z kraterami + poświata
+		float ca = dot(dir, moonDir);
+		float R = 0.0105;
+		float disk = smoothstep(cos(R), cos(R * 0.93), ca);
+		float3 md = normalize(cross(moonDir, float3(0, 0, 1)) + 1e-4); float3 mu = cross(md, moonDir);
+		float2 mp = float2(dot(dir, md), dot(dir, mu)) / R;
+		float cr = SkFbm(mp * 3.0 + 5.0, 4);
+		float3 moon = float3(1.0, 0.97, 0.9) * (0.65 + 0.45 * cr) * 30.0;
+		float halo = pow(saturate(ca), 900.0) * 0.6 + pow(saturate(ca), 60.0) * 0.08;
+		col += disk * moon + halo * float3(0.6, 0.7, 0.9);
+	}
+	return col * night;
+}

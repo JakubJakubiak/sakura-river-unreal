@@ -1,0 +1,20 @@
+# Unreal
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+.vs/
+*.xcworkspace
+*.xcodeproj
+.idea/
+.DS_Store
+# wygenerowane modele z Blendera (odtwarzane przez Tools/build_content.sh)
+Tools/out/
+# paczki do dystrybucji
+Dist/
+# treść gry generują skrypty: Tools/build_models.sh + Tools/build_content.sh
+Content/Sakura/
+Content/Collections/
+Content/Developers/
+__pycache__/
