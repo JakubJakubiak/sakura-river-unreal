@@ -685,7 +685,7 @@ void ASakuraDirector::Explode(const FVector& P, int32 Pattern)
 	// światło wybuchu — oświetla wodę, brzegi i pagodę (MegaLights)
 	int32 Li = 0; float Oldest = 1e9f;
 	for (int32 I = 0; I < Bursts.Num(); ++I) if (Bursts[I].T0 < Oldest) { Oldest = Bursts[I].T0; Li = I; }
-	Bursts[Li].T0 = Elapsed; Bursts[Li].Peak = 2500.f;          // ~0,6 lx na 90 m — rozbłysk tak jasny jak księżyc, nie przepala nocy
+	Bursts[Li].T0 = Elapsed; Bursts[Li].Peak = 1300.f;          // ~0,15 lx na 90 m na wybuch — kilka naraz rozjaśnia wodę, ale nie przepala nocy
 	BurstLights[Li]->SetWorldLocation(P);
 	BurstLights[Li]->SetLightColor(FMath::Lerp(A, B, 0.3f));
 	BurstLights[Li]->SetVisibility(true);

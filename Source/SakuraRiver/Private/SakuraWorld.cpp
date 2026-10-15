@@ -440,7 +440,7 @@ void ASakuraWorld::ApplyLighting()
 	Moon->SetWorldRotation((-MoonDir).Rotation());
 	Moon->SetIntensity(0.5f * Night * FMath::SmoothStep(-2.f, 6.f, float(FMath::RadiansToDegrees(MoonEl))) * (1.f - 0.6f * Rain));
 	Moon->SetVisibility(Night > 0.01f);
-	SkyLight->SetIntensity(1.f + Night * 0.8f);
+	SkyLight->SetIntensity(1.f + Night * 0.4f);
 
 	// ekspozycja: dzień EV100 ~12–15, noc ~-2.5..-1 (światło księżyca)
 	FPostProcessSettings& S = Post->Settings;

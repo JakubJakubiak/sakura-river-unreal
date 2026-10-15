@@ -3,7 +3,10 @@ Binaries/
 DerivedDataCache/
 Intermediate/
 Saved/
-Build/
+Build/*
+!Build/Mac/
+Build/Mac/*
+!Build/Mac/Resources/
 .vs/
 *.xcworkspace
 *.xcodeproj
